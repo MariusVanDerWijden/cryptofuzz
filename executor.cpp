@@ -92,27 +92,32 @@ template<> void ExecutorBase<component::Ciphertext, operation::SymmetricEncrypt>
 
         bool tryDecrypt = true;
 
-        switch ( op.cipher.cipherType.Get() ) {
-            case    ID("Cryptofuzz/Cipher/AES_128_OCB"):
-            case    ID("Cryptofuzz/Cipher/AES_256_OCB"):
-
-            case    ID("Cryptofuzz/Cipher/AES_128_GCM"):
-            case    ID("Cryptofuzz/Cipher/AES_192_GCM"):
-            case    ID("Cryptofuzz/Cipher/AES_256_GCM"):
-
-            case    ID("Cryptofuzz/Cipher/AES_128_CCM"):
-            case    ID("Cryptofuzz/Cipher/AES_192_CCM"):
-            case    ID("Cryptofuzz/Cipher/AES_256_CCM"):
-
-            case    ID("Cryptofuzz/Cipher/ARIA_128_CCM"):
-            case    ID("Cryptofuzz/Cipher/ARIA_192_CCM"):
-            case    ID("Cryptofuzz/Cipher/ARIA_256_CCM"):
-
-            case    ID("Cryptofuzz/Cipher/ARIA_128_GCM"):
-            case    ID("Cryptofuzz/Cipher/ARIA_192_GCM"):
-            case    ID("Cryptofuzz/Cipher/ARIA_256_GCM"):
-                tryDecrypt = false;
-                break;
+        if ( module->ID == CF_MODULE("OpenSSL") ) {
+            switch ( op.cipher.cipherType.Get() ) {
+                case    ID("Cryptofuzz/Cipher/AES_128_OCB"):
+                case    ID("Cryptofuzz/Cipher/AES_256_OCB"):
+                    tryDecrypt = false;
+                    break;
+                case    ID("Cryptofuzz/Cipher/AES_128_GCM"):
+                case    ID("Cryptofuzz/Cipher/AES_192_GCM"):
+                case    ID("Cryptofuzz/Cipher/AES_256_GCM"):
+                case    ID("Cryptofuzz/Cipher/AES_128_CCM"):
+                case    ID("Cryptofuzz/Cipher/AES_192_CCM"):
+                case    ID("Cryptofuzz/Cipher/AES_256_CCM"):
+                case    ID("Cryptofuzz/Cipher/ARIA_128_CCM"):
+                case    ID("Cryptofuzz/Cipher/ARIA_192_CCM"):
+                case    ID("Cryptofuzz/Cipher/ARIA_256_CCM"):
+                case    ID("Cryptofuzz/Cipher/ARIA_128_GCM"):
+                case    ID("Cryptofuzz/Cipher/ARIA_192_GCM"):
+                case    ID("Cryptofuzz/Cipher/ARIA_256_GCM"):
+                    if ( op.tagSize == std::nullopt ) {
+                        /* OpenSSL fails to decrypt its own CCM and GCM ciphertexts if
+                         * a tag is not included
+                         */
+                        tryDecrypt = false;
+                    }
+                    break;
+            }
         }
 
         if ( tryDecrypt == true ) {
@@ -233,6 +238,27 @@ template<> std::optional<component::Key> ExecutorBase<component::Key, operation:
     return module->OpKDF_HKDF(op);
 }
 
+/* Specialization for operation::KDF_PBKDF */
+template<> void ExecutorBase<component::Key, operation::KDF_PBKDF>::updateExtraCounters(const uint64_t moduleID, operation::KDF_PBKDF& op) const {
+    (void)moduleID;
+    (void)op;
+
+    /* TODO */
+}
+
+template<> void ExecutorBase<component::Key, operation::KDF_PBKDF>::postprocess(std::shared_ptr<Module> module, operation::KDF_PBKDF& op, const ExecutorBase<component::Key, operation::KDF_PBKDF>::ResultPair& result) const {
+    (void)module;
+    (void)op;
+
+    if ( result.second != std::nullopt ) {
+        fuzzing::memory::memory_test_msan(result.second->GetPtr(), result.second->GetSize());
+    }
+}
+
+template<> std::optional<component::Key> ExecutorBase<component::Key, operation::KDF_PBKDF>::callModule(std::shared_ptr<Module> module, operation::KDF_PBKDF& op) const {
+    return module->OpKDF_PBKDF(op);
+}
+
 /* Specialization for operation::KDF_PBKDF1 */
 template<> void ExecutorBase<component::Key, operation::KDF_PBKDF1>::updateExtraCounters(const uint64_t moduleID, operation::KDF_PBKDF1& op) const {
     (void)moduleID;
@@ -338,6 +364,70 @@ template<> std::optional<component::Key> ExecutorBase<component::Key, operation:
     return module->OpKDF_TLS1_PRF(op);
 }
 
+/* Specialization for operation::KDF_X963 */
+template<> void ExecutorBase<component::Key, operation::KDF_X963>::updateExtraCounters(const uint64_t moduleID, operation::KDF_X963& op) const {
+    (void)moduleID;
+    (void)op;
+
+    /* TODO */
+}
+
+template<> void ExecutorBase<component::Key, operation::KDF_X963>::postprocess(std::shared_ptr<Module> module, operation::KDF_X963& op, const ExecutorBase<component::Key, operation::KDF_X963>::ResultPair& result) const {
+    (void)module;
+    (void)op;
+
+    if ( result.second != std::nullopt ) {
+        fuzzing::memory::memory_test_msan(result.second->GetPtr(), result.second->GetSize());
+    }
+}
+
+template<> std::optional<component::Key> ExecutorBase<component::Key, operation::KDF_X963>::callModule(std::shared_ptr<Module> module, operation::KDF_X963& op) const {
+    return module->OpKDF_X963(op);
+}
+
+/* Specialization for operation::KDF_BCRYPT */
+template<> void ExecutorBase<component::Key, operation::KDF_BCRYPT>::updateExtraCounters(const uint64_t moduleID, operation::KDF_BCRYPT& op) const {
+    (void)moduleID;
+    (void)op;
+
+    /* TODO */
+}
+
+template<> void ExecutorBase<component::Key, operation::KDF_BCRYPT>::postprocess(std::shared_ptr<Module> module, operation::KDF_BCRYPT& op, const ExecutorBase<component::Key, operation::KDF_BCRYPT>::ResultPair& result) const {
+    (void)module;
+    (void)op;
+
+    if ( result.second != std::nullopt ) {
+        fuzzing::memory::memory_test_msan(result.second->GetPtr(), result.second->GetSize());
+    }
+}
+
+template<> std::optional<component::Key> ExecutorBase<component::Key, operation::KDF_BCRYPT>::callModule(std::shared_ptr<Module> module, operation::KDF_BCRYPT& op) const {
+    return module->OpKDF_BCRYPT(op);
+}
+
+/* Specialization for operation::KDF_SP_800_108 */
+template<> void ExecutorBase<component::Key, operation::KDF_SP_800_108>::updateExtraCounters(const uint64_t moduleID, operation::KDF_SP_800_108& op) const {
+    (void)moduleID;
+    (void)op;
+
+    /* TODO */
+}
+
+template<> void ExecutorBase<component::Key, operation::KDF_SP_800_108>::postprocess(std::shared_ptr<Module> module, operation::KDF_SP_800_108& op, const ExecutorBase<component::Key, operation::KDF_SP_800_108>::ResultPair& result) const {
+    (void)module;
+    (void)op;
+
+    if ( result.second != std::nullopt ) {
+        fuzzing::memory::memory_test_msan(result.second->GetPtr(), result.second->GetSize());
+    }
+}
+
+template<> std::optional<component::Key> ExecutorBase<component::Key, operation::KDF_SP_800_108>::callModule(std::shared_ptr<Module> module, operation::KDF_SP_800_108& op) const {
+    return module->OpKDF_SP_800_108(op);
+}
+
+
 /* Specialization for operation::Sign */
 template<> void ExecutorBase<component::Signature, operation::Sign>::updateExtraCounters(const uint64_t moduleID, operation::Sign& op) const {
     using fuzzing::datasource::ID;
@@ -421,6 +511,24 @@ template<> std::optional<component::ECC_PublicKey> ExecutorBase<component::ECC_P
     return module->OpECC_PrivateToPublic(op);
 }
 
+/* Specialization for operation::ECC_GenerateKeyPair */
+template<> void ExecutorBase<component::ECC_KeyPair, operation::ECC_GenerateKeyPair>::updateExtraCounters(const uint64_t moduleID, operation::ECC_GenerateKeyPair& op) const {
+    (void)moduleID;
+    (void)op;
+
+    /* TODO */
+}
+
+template<> void ExecutorBase<component::ECC_KeyPair, operation::ECC_GenerateKeyPair>::postprocess(std::shared_ptr<Module> module, operation::ECC_GenerateKeyPair& op, const ExecutorBase<component::ECC_KeyPair, operation::ECC_GenerateKeyPair>::ResultPair& result) const {
+    (void)module;
+    (void)op;
+    (void)result;
+}
+
+template<> std::optional<component::ECC_KeyPair> ExecutorBase<component::ECC_KeyPair, operation::ECC_GenerateKeyPair>::callModule(std::shared_ptr<Module> module, operation::ECC_GenerateKeyPair& op) const {
+    return module->OpECC_GenerateKeyPair(op);
+}
+
 /* Specialization for operation::ECDSA_Sign */
 template<> void ExecutorBase<component::ECDSA_Signature, operation::ECDSA_Sign>::updateExtraCounters(const uint64_t moduleID, operation::ECDSA_Sign& op) const {
     (void)moduleID;
@@ -484,7 +592,21 @@ template<> void ExecutorBase<component::BLS_PublicKey, operation::BLS_PrivateToP
     /* TODO */
 }
 
+/* Specialization for operation::ECDH_Derive */
+template<> void ExecutorBase<component::Secret, operation::ECDH_Derive>::updateExtraCounters(const uint64_t moduleID, operation::ECDH_Derive& op) const {
+    (void)moduleID;
+    (void)op;
+
+    /* TODO */
+}
+
 template<> void ExecutorBase<component::BLS_PublicKey, operation::BLS_PrivateToPublic>::postprocess(std::shared_ptr<Module> module, operation::BLS_PrivateToPublic& op, const ExecutorBase<component::BLS_PublicKey, operation::BLS_PrivateToPublic>::ResultPair& result) const {
+    (void)module;
+    (void)op;
+    (void)result;
+}
+
+template<> void ExecutorBase<component::Secret, operation::ECDH_Derive>::postprocess(std::shared_ptr<Module> module, operation::ECDH_Derive& op, const ExecutorBase<component::Secret, operation::ECDH_Derive>::ResultPair& result) const {
     (void)module;
     (void)op;
     (void)result;
@@ -532,7 +654,25 @@ template<> void ExecutorBase<bool, operation::BLS_Verify>::updateExtraCounters(c
     /* TODO */
 }
 
+template<> std::optional<component::Secret> ExecutorBase<component::Secret, operation::ECDH_Derive>::callModule(std::shared_ptr<Module> module, operation::ECDH_Derive& op) const {
+    return module->OpECDH_Derive(op);
+}
+
+/* Specialization for operation::BignumCalc */
+template<> void ExecutorBase<component::Bignum, operation::BignumCalc>::updateExtraCounters(const uint64_t moduleID, operation::BignumCalc& op) const {
+    (void)moduleID;
+    (void)op;
+
+    /* TODO */
+}
+
 template<> void ExecutorBase<bool, operation::BLS_Verify>::postprocess(std::shared_ptr<Module> module, operation::BLS_Verify& op, const ExecutorBase<bool, operation::BLS_Verify>::ResultPair& result) const {
+    (void)module;
+    (void)op;
+    (void)result;
+}
+
+template<> void ExecutorBase<component::Bignum, operation::BignumCalc>::postprocess(std::shared_ptr<Module> module, operation::BignumCalc& op, const ExecutorBase<component::Bignum, operation::BignumCalc>::ResultPair& result) const {
     (void)module;
     (void)op;
     (void)result;
@@ -609,6 +749,30 @@ template<> std::optional<component::G2> ExecutorBase<component::G2, operation::B
     return module->OpBLS_HashToG2(op);
 }
 
+template<> std::optional<component::Bignum> ExecutorBase<component::Bignum, operation::BignumCalc>::callModule(std::shared_ptr<Module> module, operation::BignumCalc& op) const {
+    /* Prevent timeouts */
+    if ( op.bn0.GetSize() > 1000 ) return std::nullopt;
+    if ( op.bn1.GetSize() > 1000 ) return std::nullopt;
+    if ( op.bn2.GetSize() > 1000 ) return std::nullopt;
+    if ( op.bn3.GetSize() > 1000 ) return std::nullopt;
+
+    switch ( op.calcOp.Get() ) {
+        case    CF_CALCOP("SetBit(A,B)"):
+            /* Don't allow setting very high bit positions (risk of memory exhaustion) */
+            if ( op.bn1.GetSize() > 4 ) {
+                return std::nullopt;
+            }
+            break;
+        case    CF_CALCOP("Exp(A,B)"):
+            if ( op.bn0.GetSize() > 5 || op.bn1.GetSize() > 2 ) {
+                return std::nullopt;
+            }
+            break;
+    }
+
+    return module->OpBignumCalc(op);
+}
+
 template <class ResultType, class OperationType>
 ExecutorBase<ResultType, OperationType>::ExecutorBase(const uint64_t operationID, const std::map<uint64_t, std::shared_ptr<Module> >& modules, const bool debug) :
     operationID(operationID),
@@ -637,8 +801,53 @@ typename ExecutorBase<ResultType, OperationType>::ResultSet ExecutorBase<ResultT
     return ret;
 }
 
+/* Do not compare ECC_GenerateKeyPair results, because the result can be produced indeterministically */
+template <>
+void ExecutorBase<component::ECC_KeyPair, operation::ECC_GenerateKeyPair>::compare(const std::vector< std::pair<std::shared_ptr<Module>, operation::ECC_GenerateKeyPair> >& operations, const ResultSet& results, const uint8_t* data, const size_t size) const {
+    (void)operations;
+    (void)results;
+    (void)data;
+    (void)size;
+}
+
 template <class ResultType, class OperationType>
-void ExecutorBase<ResultType, OperationType>::compare(const ResultSet& results, const uint8_t* data, const size_t size) const {
+bool ExecutorBase<ResultType, OperationType>::dontCompare(const OperationType& operation) const {
+    (void)operation;
+
+    return false;
+}
+
+/* OpenSSL DES_EDE3_WRAP randomizes the IV, result is different each time */
+template <>
+bool ExecutorBase<component::Ciphertext, operation::SymmetricEncrypt>::dontCompare(const operation::SymmetricEncrypt& operation) const {
+    if ( operation.cipher.cipherType.Get() == CF_CIPHER("DES_EDE3_WRAP") ) { return true; }
+
+    return false;
+}
+
+template <>
+bool ExecutorBase<component::Cleartext, operation::SymmetricDecrypt>::dontCompare(const operation::SymmetricDecrypt& operation) const {
+    if ( operation.cipher.cipherType.Get() == CF_CIPHER("DES_EDE3_WRAP") ) return true;
+
+    return false;
+}
+
+template <>
+bool ExecutorBase<component::MAC, operation::CMAC>::dontCompare(const operation::CMAC& operation) const {
+    if ( operation.cipher.cipherType.Get() == CF_CIPHER("DES_EDE3_WRAP") ) return true;
+
+    return false;
+}
+
+template <>
+bool ExecutorBase<component::MAC, operation::HMAC>::dontCompare(const operation::HMAC& operation) const {
+    if ( operation.cipher.cipherType.Get() == CF_CIPHER("DES_EDE3_WRAP") ) return true;
+
+    return false;
+}
+
+template <class ResultType, class OperationType>
+void ExecutorBase<ResultType, OperationType>::compare(const std::vector< std::pair<std::shared_ptr<Module>, OperationType> >& operations, const ResultSet& results, const uint8_t* data, const size_t size) const {
     if ( results.size() < 2 ) {
         /* Nothing to compare. Don't even bother filtering. */
         return;
@@ -648,6 +857,10 @@ void ExecutorBase<ResultType, OperationType>::compare(const ResultSet& results, 
 
     if ( filtered.size() < 2 ) {
         /* Nothing to compare */
+        return;
+    }
+
+    if ( dontCompare(operations[0].second) == true ) {
         return;
     }
 
@@ -691,11 +904,51 @@ void ExecutorBase<ResultType, OperationType>::abort(std::vector<std::string> mod
 }
 
 template <class ResultType, class OperationType>
+OperationType ExecutorBase<ResultType, OperationType>::getOpPostprocess(Datasource* parentDs, OperationType op) const {
+    (void)parentDs;
+    return std::move(op);
+}
+
+template <>
+operation::ECDH_Derive ExecutorBase<component::Secret, operation::ECDH_Derive>::getOpPostprocess(Datasource* parentDs, operation::ECDH_Derive op) const {
+    /* Decide whether to return the original operation, or construct a new one */
+    if ( parentDs->Get<bool>() == true) {
+        std::shared_ptr<Module> module = nullptr;
+        std::optional<component::ECC_PublicKey> pub1, pub2;
+        std::optional<component::ECC_KeyPair> keypair1, keypair2;
+
+        /* Pick random module */
+        CF_CHECK_NE(module = getModule(*parentDs), nullptr);
+
+        {
+            /* Construct two PrivateToPublic operations */
+            auto modifier1 = parentDs->GetData(0);
+            operation::ECC_PrivateToPublic op1(*parentDs, component::Modifier(modifier1.data(), modifier1.size()));
+            auto modifier2 = parentDs->GetData(0);
+            operation::ECC_PrivateToPublic op2(*parentDs, component::Modifier(modifier2.data(), modifier2.size()));
+
+            CF_CHECK_EQ(op1.curveType == op2.curveType, true);
+
+            /* Generate two public keys, using OpECC_PrivateToPublic */
+            CF_CHECK_NE(pub1 = module->OpECC_PrivateToPublic(op1), std::nullopt);
+            CF_CHECK_NE(pub2 = module->OpECC_PrivateToPublic(op2), std::nullopt);
+
+            /* Construct a new ECDH_Derive operation from these two public keys */
+            return operation::ECDH_Derive(op.modifier, op1.curveType, *pub1, *pub2);
+        }
+    }
+
+end:
+    /* Return the original operaton unmodified */
+    return op;
+}
+
+template <class ResultType, class OperationType>
 OperationType ExecutorBase<ResultType, OperationType>::getOp(Datasource* parentDs, const uint8_t* data, const size_t size) const {
     Datasource ds(data, size);
     if ( parentDs != nullptr ) {
         auto modifier = parentDs->GetData(0);
-        return std::move( OperationType(ds, component::Modifier(modifier.data(), modifier.size())) );
+        return getOpPostprocess(parentDs, std::move( OperationType(ds, component::Modifier(modifier.data(), modifier.size())) ) );
     } else {
         return std::move( OperationType(ds, component::Modifier(nullptr, 0)) );
     }
@@ -742,7 +995,7 @@ void ExecutorBase<ResultType, OperationType>::Run(Datasource& parentDs, const ui
         operations.push_back( {module, op} );
 
         /* Limit number of operations per run to prevent time-outs */
-        if ( operations.size() == 20 ) {
+        if ( operations.size() == OperationType::MaxOperations() ) {
             break;
         }
     } while ( parentDs.Get<bool>() == true );
@@ -781,6 +1034,9 @@ void ExecutorBase<ResultType, OperationType>::Run(Datasource& parentDs, const ui
     }
     */
 
+    if ( debug == true && !operations.empty() ) {
+        printf("Running:\n%s\n", operations[0].second.ToString().c_str());
+    }
     for (size_t i = 0; i < operations.size(); i++) {
         auto& operation = operations[i];
 
@@ -805,10 +1061,6 @@ void ExecutorBase<ResultType, OperationType>::Run(Datasource& parentDs, const ui
             }
         }
 
-        if ( debug == true ) {
-            printf("Running:\n%s\n", op.ToString().c_str());
-        }
-
         results.push_back( {module, std::move(callModule(module, op))} );
 
         const auto& result = results.back();
@@ -817,12 +1069,20 @@ void ExecutorBase<ResultType, OperationType>::Run(Datasource& parentDs, const ui
             updateExtraCounters(module->ID, op);
         }
 
+        if ( debug == true ) {
+            printf("Module %s result:\n\n%s\n\n",
+                    result.first->name.c_str(),
+                    result.second == std::nullopt ?
+                        "(empty)" :
+                        util::ToString(*result.second).c_str());
+        }
+
         tests::test(op, result.second);
 
         postprocess(module, op, result);
     }
 
-    compare(results, data, size);
+    compare(operations, results, data, size);
 }
 
 /* Explicit template instantiation */
@@ -834,13 +1094,18 @@ template class ExecutorBase<component::Cleartext, operation::SymmetricDecrypt>;
 template class ExecutorBase<component::Key, operation::KDF_SCRYPT>;
 template class ExecutorBase<component::Key, operation::KDF_HKDF>;
 template class ExecutorBase<component::Key, operation::KDF_TLS1_PRF>;
+template class ExecutorBase<component::Key, operation::KDF_PBKDF>;
 template class ExecutorBase<component::Key, operation::KDF_PBKDF1>;
 template class ExecutorBase<component::Key, operation::KDF_PBKDF2>;
 template class ExecutorBase<component::Key, operation::KDF_ARGON2>;
 template class ExecutorBase<component::Key, operation::KDF_SSH>;
+template class ExecutorBase<component::Key, operation::KDF_X963>;
+template class ExecutorBase<component::Key, operation::KDF_BCRYPT>;
+template class ExecutorBase<component::Key, operation::KDF_SP_800_108>;
 template class ExecutorBase<component::Signature, operation::Sign>;
 template class ExecutorBase<bool, operation::Verify>;
 template class ExecutorBase<component::ECC_PublicKey, operation::ECC_PrivateToPublic>;
+template class ExecutorBase<component::ECC_KeyPair, operation::ECC_GenerateKeyPair>;
 template class ExecutorBase<component::ECDSA_Signature, operation::ECDSA_Sign>;
 template class ExecutorBase<bool, operation::ECDSA_Verify>;
 template class ExecutorBase<component::BLS_PublicKey, operation::BLS_PrivateToPublic>;
@@ -849,5 +1114,7 @@ template class ExecutorBase<bool, operation::BLS_Verify>;
 template class ExecutorBase<bool, operation::BLS_Pairing>;
 template class ExecutorBase<component::G1, operation::BLS_HashToG1>;
 template class ExecutorBase<component::G2, operation::BLS_HashToG2>;
+template class ExecutorBase<component::Secret, operation::ECDH_Derive>;
+template class ExecutorBase<component::Bignum, operation::BignumCalc>;
 
 } /* namespace cryptofuzz */

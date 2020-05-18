@@ -23,11 +23,16 @@ void Driver::Run(const uint8_t* data, const size_t size) const {
     static ExecutorKDF_SCRYPT executorKDF_SCRYPT(CF_OPERATION("KDF_SCRYPT"), modules, debug);
     static ExecutorKDF_HKDF executorKDF_HKDF(CF_OPERATION("KDF_HKDF"), modules, debug);
     static ExecutorKDF_TLS1_PRF executorKDF_TLS1_PRF(CF_OPERATION("KDF_TLS1_PRF"), modules, debug);
+    static ExecutorKDF_PBKDF executorKDF_PBKDF(CF_OPERATION("KDF_PBKDF"), modules, debug);
     static ExecutorKDF_PBKDF1 executorKDF_PBKDF1(CF_OPERATION("KDF_PBKDF1"), modules, debug);
     static ExecutorKDF_PBKDF2 executorKDF_PBKDF2(CF_OPERATION("KDF_PBKDF2"), modules, debug);
     static ExecutorKDF_ARGON2 executorKDF_ARGON2(CF_OPERATION("KDF_ARGON2"), modules, debug);
     static ExecutorKDF_SSH executorKDF_SSH(ID("Cryptofuzz/Operation/KDF_SSH"), modules, debug);
+    static ExecutorKDF_X963 executorKDF_X963(CF_OPERATION("KDF_X963"), modules, debug);
+    static ExecutorKDF_BCRYPT executorKDF_BCRYPT(CF_OPERATION("KDF_BCRYPT"), modules, debug);
+    static ExecutorKDF_SP_800_108 executorKDF_SP_800_108(CF_OPERATION("KDF_SP_800_108"), modules, debug);
     static ExecutorECC_PrivateToPublic executorECC_PrivateToPublic(CF_OPERATION("ECC_PrivateToPublic"), modules, debug);
+    static ExecutorECC_GenerateKeyPair executorECC_GenerateKeyPair(CF_OPERATION("ECC_GenerateKeyPair"), modules, debug);
     static ExecutorECDSA_Sign executorECDSA_Sign(CF_OPERATION("ECDSA_Sign"), modules, debug);
     static ExecutorECDSA_Verify executorECDSA_Verify(CF_OPERATION("ECDSA_Verify"), modules, debug);
     static ExecutorBLS_PrivateToPublic executorBLS_PrivateToPublic(CF_OPERATION("BLS_PrivateToPublic"), modules, debug);
@@ -36,6 +41,8 @@ void Driver::Run(const uint8_t* data, const size_t size) const {
     static ExecutorBLS_Pairing executorBLS_Pairing(CF_OPERATION("BLS_Pairing"), modules, debug);
     static ExecutorBLS_HashToG1 executorBLS_HashToG1(CF_OPERATION("BLS_HashToG1"), modules, debug);
     static ExecutorBLS_HashToG2 executorBLS_HashToG2(CF_OPERATION("BLS_HashToG2"), modules, debug);
+    static ExecutorECDH_Derive executorECDH_Derive(CF_OPERATION("ECDH_Derive"), modules, debug);
+    static ExecutorBignumCalc executorBignumCalc(CF_OPERATION("BignumCalc"), modules, debug);
 
     try {
 
@@ -70,6 +77,9 @@ void Driver::Run(const uint8_t* data, const size_t size) const {
             case CF_OPERATION("KDF_TLS1_PRF"):
                 executorKDF_TLS1_PRF.Run(ds, payload.data(), payload.size());
                 break;
+            case CF_OPERATION("KDF_PBKDF"):
+                executorKDF_PBKDF.Run(ds, payload.data(), payload.size());
+                break;
             case CF_OPERATION("KDF_PBKDF1"):
                 executorKDF_PBKDF1.Run(ds, payload.data(), payload.size());
                 break;
@@ -81,6 +91,15 @@ void Driver::Run(const uint8_t* data, const size_t size) const {
                 break;
             case CF_OPERATION("KDF_SSH"):
                 executorKDF_SSH.Run(ds, payload.data(), payload.size());
+                break;
+            case CF_OPERATION("KDF_X963"):
+                executorKDF_X963.Run(ds, payload.data(), payload.size());
+                break;
+            case CF_OPERATION("KDF_BCRYPT"):
+                executorKDF_BCRYPT.Run(ds, payload.data(), payload.size());
+                break;
+            case CF_OPERATION("KDF_SP_800_108"):
+                executorKDF_SP_800_108.Run(ds, payload.data(), payload.size());
                 break;
 #if 0
             case    ID("Cryptofuzz/Operation/Sign"):
@@ -94,6 +113,9 @@ void Driver::Run(const uint8_t* data, const size_t size) const {
 #if 0
             case CF_OPERATION("ECC_PrivateToPublic"):
                 executorECC_PrivateToPublic.Run(ds, payload.data(), payload.size());
+                break;
+            case CF_OPERATION("ECC_GenerateKeyPair"):
+                executorECC_GenerateKeyPair.Run(ds, payload.data(), payload.size());
                 break;
             case CF_OPERATION("ECDSA_Sign"):
                 executorECDSA_Sign.Run(ds, payload.data(), payload.size());
@@ -119,6 +141,12 @@ void Driver::Run(const uint8_t* data, const size_t size) const {
                 break;
             case CF_OPERATION("BLS_HashToG2"):
                 executorBLS_HashToG2.Run(ds, payload.data(), payload.size());
+                break;
+            case CF_OPERATION("ECDH_Derive"):
+                executorECDH_Derive.Run(ds, payload.data(), payload.size());
+                break;
+            case CF_OPERATION("BignumCalc"):
+                executorBignumCalc.Run(ds, payload.data(), payload.size());
                 break;
         }
     } catch ( Datasource::OutOfData ) {

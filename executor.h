@@ -22,8 +22,10 @@ class ExecutorBase {
         using ResultSet = std::vector<ResultPair>;
 
         ResultSet filter(const ResultSet& results) const;
-        void compare(const ResultSet& results, const uint8_t* data, const size_t size) const;
+        bool dontCompare(const OperationType& operation) const;
+        void compare(const std::vector< std::pair<std::shared_ptr<Module>, OperationType> >& operations, const ResultSet& results, const uint8_t* data, const size_t size) const;
         OperationType getOp(Datasource* parentDs, const uint8_t* data, const size_t size) const;
+        OperationType getOpPostprocess(Datasource* parentDs, OperationType op) const;
         std::shared_ptr<Module> getModule(Datasource& ds) const;
         void updateExtraCounters(
                 const uint64_t moduleID,
@@ -53,13 +55,18 @@ using ExecutorSymmetricDecrypt = ExecutorBase<component::Cleartext, operation::S
 using ExecutorKDF_SCRYPT = ExecutorBase<component::Key, operation::KDF_SCRYPT>;
 using ExecutorKDF_HKDF = ExecutorBase<component::Key, operation::KDF_HKDF>;
 using ExecutorKDF_TLS1_PRF = ExecutorBase<component::Key, operation::KDF_TLS1_PRF>;
+using ExecutorKDF_PBKDF = ExecutorBase<component::Key, operation::KDF_PBKDF>;
 using ExecutorKDF_PBKDF1 = ExecutorBase<component::Key, operation::KDF_PBKDF1>;
 using ExecutorKDF_PBKDF2 = ExecutorBase<component::Key, operation::KDF_PBKDF2>;
 using ExecutorKDF_ARGON2 = ExecutorBase<component::Key, operation::KDF_ARGON2>;
 using ExecutorKDF_SSH = ExecutorBase<component::Key, operation::KDF_SSH>;
+using ExecutorKDF_X963 = ExecutorBase<component::Key, operation::KDF_X963>;
+using ExecutorKDF_BCRYPT = ExecutorBase<component::Key, operation::KDF_BCRYPT>;
+using ExecutorKDF_SP_800_108 = ExecutorBase<component::Key, operation::KDF_SP_800_108>;
 using ExecutorSign = ExecutorBase<component::Signature, operation::Sign>;
 using ExecutorVerify = ExecutorBase<bool, operation::Verify>;
 using ExecutorECC_PrivateToPublic = ExecutorBase<component::ECC_PublicKey, operation::ECC_PrivateToPublic>;
+using ExecutorECC_GenerateKeyPair = ExecutorBase<component::ECC_KeyPair, operation::ECC_GenerateKeyPair>;
 using ExecutorECDSA_Sign = ExecutorBase<component::ECDSA_Signature, operation::ECDSA_Sign>;
 using ExecutorECDSA_Verify = ExecutorBase<bool, operation::ECDSA_Verify>;
 using ExecutorBLS_PrivateToPublic = ExecutorBase<component::BLS_PublicKey, operation::BLS_PrivateToPublic>;
@@ -68,5 +75,7 @@ using ExecutorBLS_Verify = ExecutorBase<bool, operation::BLS_Verify>;
 using ExecutorBLS_Pairing = ExecutorBase<bool, operation::BLS_Pairing>;
 using ExecutorBLS_HashToG1 = ExecutorBase<component::G1, operation::BLS_HashToG1>;
 using ExecutorBLS_HashToG2 = ExecutorBase<component::G2, operation::BLS_HashToG2>;
+using ExecutorECDH_Derive = ExecutorBase<component::Secret, operation::ECDH_Derive>;
+using ExecutorBignumCalc = ExecutorBase<component::Bignum, operation::BignumCalc>;
 
 } /* namespace cryptofuzz */

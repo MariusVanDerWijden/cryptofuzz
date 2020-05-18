@@ -39,6 +39,10 @@
   #include <modules/libsodium/module.h>
 #endif
 
+#if defined(CRYPTOFUZZ_LIBTOMCRYPT)
+  #include <modules/libtomcrypt/module.h>
+#endif
+
 #if defined(CRYPTOFUZZ_CRYPTOPP)
   #include <modules/cryptopp/module.h>
 #endif
@@ -69,6 +73,42 @@
 
 #if defined(CRYPTOFUZZ_CHIA_BLS)
   #include <modules/chia_bls/module.h>
+#endif
+
+#if defined(CRYPTOFUZZ_NETTLE)
+  #include <modules/nettle/module.h>
+#endif
+
+#if defined(CRYPTOFUZZ_WOLFCRYPT)
+  #include <modules/wolfcrypt/module.h>
+#endif
+
+#if defined(CRYPTOFUZZ_LIBGMP)
+  #include <modules/libgmp/module.h>
+#endif
+
+#if defined(CRYPTOFUZZ_BN_JS)
+  #include <modules/bn.js/module.h>
+#endif
+
+#if defined(CRYPTOFUZZ_CRYPTO_JS)
+  #include <modules/crypto-js/module.h>
+#endif
+
+#if defined(CRYPTOFUZZ_BIGNUMBER_JS)
+  #include <modules/bignumber.js/module.h>
+#endif
+
+#if defined(CRYPTOFUZZ_MPDECIMAL)
+  #include <modules/mpdecimal/module.h>
+#endif
+
+#if defined(CRYPTOFUZZ_LINUX)
+  #include <modules/linux/module.h>
+#endif
+
+#if defined(CRYPTOFUZZ_SYMCRYPT)
+  #include <modules/symcrypt/module.h>
 #endif
 
 std::shared_ptr<cryptofuzz::Driver> driver = nullptr;
@@ -122,6 +162,10 @@ extern "C" int LLVMFuzzerInitialize(int *argc, char ***argv) {
     driver->LoadModule( std::make_shared<cryptofuzz::module::libsodium>() );
 #endif
 
+#if defined(CRYPTOFUZZ_LIBTOMCRYPT)
+    driver->LoadModule( std::make_shared<cryptofuzz::module::libtomcrypt>() );
+#endif
+
 #if defined(CRYPTOFUZZ_CRYPTOPP)
     driver->LoadModule( std::make_shared<cryptofuzz::module::CryptoPP>() );
 #endif
@@ -152,6 +196,42 @@ extern "C" int LLVMFuzzerInitialize(int *argc, char ***argv) {
 
 #if defined(CRYPTOFUZZ_CHIA_BLS)
     driver->LoadModule( std::make_shared<cryptofuzz::module::chia_bls>() );
+#endif
+
+#if defined(CRYPTOFUZZ_NETTLE)
+    driver->LoadModule( std::make_shared<cryptofuzz::module::Nettle>() );
+#endif
+
+#if defined(CRYPTOFUZZ_WOLFCRYPT)
+    driver->LoadModule( std::make_shared<cryptofuzz::module::wolfCrypt>() );
+#endif
+
+#if defined(CRYPTOFUZZ_LIBGMP)
+    driver->LoadModule( std::make_shared<cryptofuzz::module::libgmp>() );
+#endif
+
+#if defined(CRYPTOFUZZ_BN_JS)
+    driver->LoadModule( std::make_shared<cryptofuzz::module::bn_js>() );
+#endif
+
+#if defined(CRYPTOFUZZ_CRYPTO_JS)
+    driver->LoadModule( std::make_shared<cryptofuzz::module::crypto_js>() );
+#endif
+
+#if defined(CRYPTOFUZZ_BIGNUMBER_JS)
+    driver->LoadModule( std::make_shared<cryptofuzz::module::bignumber_js>() );
+#endif
+
+#if defined(CRYPTOFUZZ_MPDECIMAL)
+    driver->LoadModule( std::make_shared<cryptofuzz::module::mpdecimal>() );
+#endif
+
+#if defined(CRYPTOFUZZ_LINUX)
+    driver->LoadModule( std::make_shared<cryptofuzz::module::Linux>() );
+#endif
+
+#if defined(CRYPTOFUZZ_SYMCRYPT)
+    driver->LoadModule( std::make_shared<cryptofuzz::module::SymCrypt>() );
 #endif
     return 0;
 }

@@ -1,10 +1,14 @@
 # Cryptofuzz - Differential cryptography fuzzing
 
+[![Fuzzing Status](https://oss-fuzz-build-logs.storage.googleapis.com/badges/cryptofuzz.svg)](https://oss-fuzz.com/coverage-report/job/libfuzzer_asan_cryptofuzz/latest)
+
 ## Documentation
 
-Documentation on how to implement modules and use Cryptofuzz will follow.
+For building Cryptofuzz, please refer to [`docs/building.md`](docs/building.md).
 
-## Hall of Fame
+For instructions on how to run Cryptofuzz, please see [`docs/running.md`](docs/running.md).
+
+## Bugs found by Cryptofuzz
 
 - OpenSSL: [ARIA GCM ciphers memory leak after EVP_CTRL_AEAD_SET_IVLEN](https://github.com/openssl/openssl/issues/8567)
 - OpenSSL: [HMAC with SHAKE128 via EVP interface crashes on EVP_DigestSignUpdate](https://github.com/openssl/openssl/issues/8563)
@@ -37,3 +41,33 @@ Documentation on how to implement modules and use Cryptofuzz will follow.
 - Botan: [CAST5_CBC invalid output](https://github.com/randombit/botan/issues/2081)
 - Botan: [Streebog invalid output](https://github.com/randombit/botan/issues/2082)
 - Botan: [PBKDF2 hang (very long loop) if iterations == 0](https://github.com/randombit/botan/issues/2088)
+- NSS: [HKDF SHA1 stack buffer overflow, CVE-2019-11759](https://hg.mozilla.org/projects/nss/rev/c0913ad7a5609751a8dfc37ae2e0a7a0cd6a42dd)
+- NSS: [RC2 CBC OOB read with undersized IV](https://hg.mozilla.org/projects/nss/rev/53d92a32408049038f450aa747b0030607988230)
+- NSS: [SEED_CBC encryption out-of-bounds write](https://hg.mozilla.org/projects/nss/rev/7580a5a212c78ab21fc4878330dd7872c3b530b8)
+- NSS: [CKM_AES_GCM succeeds with invalid tag sizes, risk of memory corruption](https://hg.mozilla.org/projects/nss/rev/4e3971fd992c0513d0696048c64b7230e5b6039b)
+- NSS: [PBKDF2 memory leak if key size > 256](https://bugzilla.mozilla.org/show_bug.cgi?id=1591363)
+- NSS: [DES IV buffer overread if IV is undersized](https://hg.mozilla.org/projects/nss/rev/35857ae98190c590ae00a01cb1a2ed48def3915f)
+- wolfCrypt: [RC4 may dereference empty key](https://github.com/wolfSSL/wolfssl/pull/2578)
+- wolfCrypt: [SCRYPT leaves output buffer uninitialized](https://github.com/wolfSSL/wolfssl/pull/2578)
+- wolfCrypt: wc_HKDF + BLAKE2B leaves output buffer uninitialized
+- wolfCrypt: [PKCS12 PBKDF + SHA3 buffer overflow](https://github.com/wolfSSL/wolfssl/pull/2677)
+- NSS: mp_toradix buffer overflow (write) TBA
+- BLAKE3: [memcpy undefined behavior in C impl](https://github.com/BLAKE3-team/BLAKE3/pull/4)
+- sjcl: [scrypt wrong result with certain parameters](https://github.com/bitwiseshiftleft/sjcl/issues/409)
+- sjcl: [RIPEMD160 HMAC wrong result](https://github.com/bitwiseshiftleft/sjcl/issues/410)
+- sjcl: [bignum subtraction incorrect result](https://github.com/bitwiseshiftleft/sjcl/issues/411)
+- NSS: [SEEK ECB leaves output buffer uninitialized when encrypting more than 1 block](https://hg.mozilla.org/projects/nss/rev/d67517e92371ba798751720f7d21968ab2e25c52)
+- libgcrypt: [gcry_mpi_invm indicates multiplicative inverse exists when it does not](https://lists.gnupg.org/pipermail/gcrypt-devel/2020-April/004947.html)
+- wolfCrypt: [AES GCM allows IV of size 0](https://github.com/wolfSSL/wolfssl/pull/2910)
+- wolfCrypt: [AES CCM allows invalid tag sizes](https://github.com/wolfSSL/wolfssl/pull/2930)
+- LibreSSL: [AES GCM allows IV of size 0](https://github.com/openbsd/src/commit/539125b0baa78c5c019ab9e3bbeca4fa822d1bf7)
+- OpenSSL: [CAST5 invalid output](https://github.com/openssl/openssl/issues/11459)
+- Crypto++: [SPECK64 different output if input is passed in chunks](https://github.com/weidai11/cryptopp/issues/945)
+- Crypto++: [Undersized SipHash key leads to buffer out-of-bounds read](https://github.com/weidai11/cryptopp/issues/947)
+- libkcapi: [PBKDF2 with iteration count = 0 zeroes output buffer](https://github.com/smuellerDD/libkcapi/issues/93)
+- wolfCrypt: [HKDF allows key sizes > 255 * digest size TBA](https://github.com/wolfSSL/wolfssl/pull/2956)
+- Botan: [HKDF clamps output to 255 * requested key size](https://github.com/randombit/botan/issues/2347)
+- SymCrypt: [Signed overshift and other undefined behavior](https://github.com/microsoft/SymCrypt/issues/8)
+- SymCrypt: TBA
+- NSS: TBA
+- NSS: TBA

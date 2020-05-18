@@ -20,7 +20,7 @@ namespace module {
 
 class OpenSSL : public Module {
     private:
-        bool isAEAD(const EVP_CIPHER* ctx) const;
+        bool isAEAD(const EVP_CIPHER* ctx, const uint64_t cipherType) const;
         const EVP_MD* toEVPMD(const component::DigestType& digestType) const;
         const EVP_CIPHER* toEVPCIPHER(const component::SymmetricCipherType cipherType) const;
 #if defined(CRYPTOFUZZ_BORINGSSL) || defined(CRYPTOFUZZ_LIBRESSL)
@@ -82,12 +82,18 @@ class OpenSSL : public Module {
 #endif
 #if !defined(CRYPTOFUZZ_BORINGSSL) && !defined(CRYPTOFUZZ_LIBRESSL) && !defined(CRYPTOFUZZ_OPENSSL_102) && !defined(CRYPTOFUZZ_OPENSSL_111) && !defined(CRYPTOFUZZ_OPENSSL_110)
         std::optional<component::Key> OpKDF_SSH(operation::KDF_SSH& op) override;
+        std::optional<component::Key> OpKDF_X963(operation::KDF_X963& op) override;
 #endif
         std::optional<component::MAC> OpCMAC(operation::CMAC& op) override;
         std::optional<component::Signature> OpSign(operation::Sign& op) override;
         std::optional<bool> OpVerify(operation::Verify& op) override;
+#if !(defined(CRYPTOFUZZ_LIBRESSL) && defined(SANITIZER_MSAN))
         std::optional<component::ECC_PublicKey> OpECC_PrivateToPublic(operation::ECC_PrivateToPublic& op) override;
+        std::optional<component::ECC_KeyPair> OpECC_GenerateKeyPair(operation::ECC_GenerateKeyPair& op) override;
         std::optional<bool> OpECDSA_Verify(operation::ECDSA_Verify& op) override;
+        std::optional<component::Secret> OpECDH_Derive(operation::ECDH_Derive& op) override;
+        std::optional<component::Bignum> OpBignumCalc(operation::BignumCalc& op) override;
+#endif
 };
 
 } /* namespace module */

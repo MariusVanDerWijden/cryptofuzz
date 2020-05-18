@@ -47,6 +47,8 @@ class Digest : public Operation {
             digestType(json["digestType"])
         { }
 
+
+        static size_t MaxOperations(void) { return 20; }
         std::string Name(void) const override;
         std::string ToString(void) const override;
         nlohmann::json ToJSON(void) const override;
@@ -80,6 +82,7 @@ class HMAC : public Operation {
             cipher(json["cipher"])
         { }
 
+        static size_t MaxOperations(void) { return 20; }
         std::string Name(void) const override;
         std::string ToString(void) const override;
         nlohmann::json ToJSON(void) const override;
@@ -131,6 +134,7 @@ class SymmetricEncrypt : public Operation {
             )
         { }
 
+        static size_t MaxOperations(void) { return 20; }
         std::string Name(void) const override;
         std::string ToString(void) const override;
         nlohmann::json ToJSON(void) const override;
@@ -183,6 +187,7 @@ class SymmetricDecrypt : public Operation {
             cleartextSize(json["cleartextSize"].get<uint64_t>())
         { }
 
+        static size_t MaxOperations(void) { return 20; }
         std::string Name(void) const override;
         std::string ToString(void) const override;
         nlohmann::json ToJSON(void) const override;
@@ -229,6 +234,7 @@ class KDF_SCRYPT : public Operation {
             keySize(json["keySize"].get<uint64_t>())
         { }
 
+        static size_t MaxOperations(void) { return 20; }
         std::string Name(void) const override;
         std::string ToString(void) const override;
         nlohmann::json ToJSON(void) const override;
@@ -259,7 +265,7 @@ class KDF_HKDF : public Operation {
             password(ds),
             salt(ds),
             info(ds),
-            keySize(ds.Get<uint64_t>() % 1024)
+            keySize(ds.Get<uint64_t>() % 17000)
         { }
         KDF_HKDF(nlohmann::json json) :
             Operation(json["modifier"]),
@@ -270,6 +276,7 @@ class KDF_HKDF : public Operation {
             keySize(json["keySize"].get<uint64_t>())
         { }
 
+        static size_t MaxOperations(void) { return 20; }
         std::string Name(void) const override;
         std::string ToString(void) const override;
         nlohmann::json ToJSON(void) const override;
@@ -307,6 +314,7 @@ class KDF_TLS1_PRF : public Operation {
             keySize(json["keySize"].get<uint64_t>())
         { }
 
+        static size_t MaxOperations(void) { return 20; }
         std::string Name(void) const override;
         std::string ToString(void) const override;
         nlohmann::json ToJSON(void) const override;
@@ -315,6 +323,47 @@ class KDF_TLS1_PRF : public Operation {
                 (digestType == rhs.digestType) &&
                 (secret == rhs.secret) &&
                 (seed == rhs.seed) &&
+                (modifier == rhs.modifier);
+        }
+};
+
+class KDF_PBKDF : public Operation {
+    public:
+        const component::DigestType digestType;
+        const component::Cleartext password;
+        const component::Cleartext salt;
+        const uint64_t iterations;
+
+        const uint64_t keySize;
+
+        KDF_PBKDF(Datasource& ds, component::Modifier modifier) :
+            Operation(std::move(modifier)),
+            digestType(ds),
+            password(ds),
+            salt(ds),
+            iterations(ds.Get<uint64_t>() % 5),
+            keySize(ds.Get<uint64_t>() % 1024)
+        { }
+        KDF_PBKDF(nlohmann::json json) :
+            Operation(json["modifier"]),
+            digestType(json["digestType"]),
+            password(json["password"]),
+            salt(json["salt"]),
+            iterations(json["iterations"].get<uint64_t>()),
+            keySize(json["keySize"].get<uint64_t>())
+        { }
+
+        static size_t MaxOperations(void) { return 20; }
+        std::string Name(void) const override;
+        std::string ToString(void) const override;
+        nlohmann::json ToJSON(void) const override;
+        inline bool operator==(const KDF_PBKDF& rhs) const {
+            return
+                (digestType == rhs.digestType) &&
+                (password == rhs.password) &&
+                (salt == rhs.salt) &&
+                (iterations == rhs.iterations) &&
+                (keySize == rhs.keySize) &&
                 (modifier == rhs.modifier);
         }
 };
@@ -345,6 +394,7 @@ class KDF_PBKDF1 : public Operation {
             keySize(json["keySize"].get<uint64_t>())
         { }
 
+        static size_t MaxOperations(void) { return 20; }
         std::string Name(void) const override;
         std::string ToString(void) const override;
         nlohmann::json ToJSON(void) const override;
@@ -385,6 +435,7 @@ class KDF_PBKDF2 : public Operation {
             keySize(json["keySize"].get<uint64_t>())
         { }
 
+        static size_t MaxOperations(void) { return 20; }
         std::string Name(void) const override;
         std::string ToString(void) const override;
         nlohmann::json ToJSON(void) const override;
@@ -430,6 +481,7 @@ class KDF_ARGON2 : public Operation {
             keySize(json["keySize"].get<uint32_t>())
         { }
 
+        static size_t MaxOperations(void) { return 3; }
         std::string Name(void) const override;
         std::string ToString(void) const override;
         nlohmann::json ToJSON(void) const override;
@@ -474,6 +526,7 @@ class KDF_SSH : public Operation {
             keySize(json["keySize"].get<uint64_t>())
         { }
 
+        static size_t MaxOperations(void) { return 20; }
         std::string Name(void) const override;
         std::string ToString(void) const override;
         nlohmann::json ToJSON(void) const override;
@@ -484,6 +537,126 @@ class KDF_SSH : public Operation {
                 (xcghash == rhs.xcghash) &&
                 (session_id == rhs.session_id) &&
                 (type == rhs.type) &&
+                (keySize == rhs.keySize) &&
+                (modifier == rhs.modifier);
+        }
+};
+
+class KDF_X963 : public Operation {
+    public:
+        const component::DigestType digestType;
+        const component::Cleartext secret;
+        const component::Cleartext info;
+        const uint64_t keySize;
+
+        KDF_X963(Datasource& ds, component::Modifier modifier) :
+            Operation(std::move(modifier)),
+            digestType(ds),
+            secret(ds),
+            info(ds),
+            keySize(ds.Get<uint64_t>() % 1024)
+        { }
+        KDF_X963(nlohmann::json json) :
+            Operation(json["modifier"]),
+            digestType(json["digestType"]),
+            secret(json["secret"]),
+            info(json["info"]),
+            keySize(json["keySize"].get<uint64_t>())
+        { }
+
+        static size_t MaxOperations(void) { return 20; }
+        std::string Name(void) const override;
+        std::string ToString(void) const override;
+        nlohmann::json ToJSON(void) const override;
+        inline bool operator==(const KDF_X963& rhs) const {
+            return
+                (digestType == rhs.digestType) &&
+                (secret == rhs.secret) &&
+                (info == rhs.info) &&
+                (keySize == rhs.keySize) &&
+                (modifier == rhs.modifier);
+        }
+};
+
+class KDF_BCRYPT : public Operation {
+    public:
+        const component::DigestType digestType;
+        const component::Cleartext secret;
+        const component::Cleartext salt;
+        const uint32_t iterations;
+        const uint64_t keySize;
+
+        KDF_BCRYPT(Datasource& ds, component::Modifier modifier) :
+            Operation(std::move(modifier)),
+            digestType(ds),
+            secret(ds),
+            salt(ds),
+            iterations(ds.Get<uint32_t>() % 3),
+            keySize(ds.Get<uint64_t>() % 1024)
+        { }
+        KDF_BCRYPT(nlohmann::json json) :
+            Operation(json["modifier"]),
+            digestType(json["digestType"]),
+            secret(json["secret"]),
+            salt(json["salt"]),
+            iterations(json["iterations"].get<uint32_t>()),
+            keySize(json["keySize"].get<uint64_t>())
+        { }
+
+        static size_t MaxOperations(void) { return 20; }
+        std::string Name(void) const override;
+        std::string ToString(void) const override;
+        nlohmann::json ToJSON(void) const override;
+        inline bool operator==(const KDF_BCRYPT& rhs) const {
+            return
+                (digestType == rhs.digestType) &&
+                (secret == rhs.secret) &&
+                (salt == rhs.salt) &&
+                (iterations == rhs.iterations) &&
+                (keySize == rhs.keySize) &&
+                (modifier == rhs.modifier);
+        }
+};
+
+class KDF_SP_800_108 : public Operation {
+    public:
+        const component::MACType mech;
+        const component::Cleartext secret;
+        const component::Cleartext salt;
+        const component::Cleartext label;
+        const uint8_t mode;
+        const uint64_t keySize;
+
+        KDF_SP_800_108(Datasource& ds, component::Modifier modifier) :
+            Operation(std::move(modifier)),
+            mech(ds),
+            secret(ds),
+            salt(ds),
+            label(ds),
+            mode(ds.Get<uint8_t>()),
+            keySize(ds.Get<uint64_t>() % 17000)
+        { }
+        KDF_SP_800_108(nlohmann::json json) :
+            Operation(json["modifier"]),
+            mech(json["mech"]),
+            secret(json["secret"]),
+            salt(json["salt"]),
+            label(json["label"]),
+            mode(json["mode"].get<uint8_t>()),
+            keySize(json["keySize"].get<uint64_t>())
+        { }
+
+        static size_t MaxOperations(void) { return 20; }
+        std::string Name(void) const override;
+        std::string ToString(void) const override;
+        nlohmann::json ToJSON(void) const override;
+        inline bool operator==(const KDF_SP_800_108& rhs) const {
+            return
+                (mech == rhs.mech) &&
+                (secret == rhs.secret) &&
+                (salt == rhs.salt) &&
+                (label == rhs.label) &&
+                (mode == rhs.mode) &&
                 (keySize == rhs.keySize) &&
                 (modifier == rhs.modifier);
         }
@@ -505,6 +678,7 @@ class CMAC : public Operation {
             cipher(json["cipher"])
         { }
 
+        static size_t MaxOperations(void) { return 20; }
         std::string Name(void) const override;
         std::string ToString(void) const override;
         nlohmann::json ToJSON(void) const override;
@@ -532,6 +706,7 @@ class Sign : public Operation {
             signatureSize(ds.Get<uint64_t>() % (10*1024*1024))
         { }
 
+        static size_t MaxOperations(void) { return 20; }
         std::string Name(void) const override;
         std::string ToString(void) const override;
         nlohmann::json ToJSON(void) const override;
@@ -558,6 +733,7 @@ class Verify : public Operation {
         { }
         Verify(const Sign& opSign, const component::Signature signature, component::Modifier modifier);
 
+        static size_t MaxOperations(void) { return 20; }
         std::string Name(void) const override;
         std::string ToString(void) const override;
         nlohmann::json ToJSON(void) const override;
@@ -584,6 +760,7 @@ class ECC_PrivateToPublic : public Operation {
             priv(json["priv"])
         { }
 
+        static size_t MaxOperations(void) { return 5; }
         std::string Name(void) const override;
         std::string ToString(void) const override;
         nlohmann::json ToJSON(void) const override;
@@ -591,6 +768,31 @@ class ECC_PrivateToPublic : public Operation {
             return
                 (curveType == rhs.curveType) &&
                 (priv == rhs.priv) &&
+                (modifier == rhs.modifier);
+        }
+};
+
+class ECC_GenerateKeyPair : public Operation {
+    public:
+        const component::CurveType curveType;
+
+        ECC_GenerateKeyPair(Datasource& ds, component::Modifier modifier) :
+            Operation(std::move(modifier)),
+            curveType(ds)
+        { }
+
+        ECC_GenerateKeyPair(nlohmann::json json) :
+            Operation(json["modifier"]),
+            curveType(json["curveType"])
+        { }
+
+        static size_t MaxOperations(void) { return 5; }
+        std::string Name(void) const override;
+        std::string ToString(void) const override;
+        nlohmann::json ToJSON(void) const override;
+        inline bool operator==(const ECC_GenerateKeyPair& rhs) const {
+            return
+                (curveType == rhs.curveType) &&
                 (modifier == rhs.modifier);
         }
 };
@@ -614,6 +816,7 @@ class ECDSA_Sign : public Operation {
             cleartext(json["cleartext"])
         { }
 
+        static size_t MaxOperations(void) { return 5; }
         std::string Name(void) const override;
         std::string ToString(void) const override;
         nlohmann::json ToJSON(void) const override;
@@ -648,6 +851,7 @@ class ECDSA_Verify : public Operation {
             signature(json["sig_r"], json["sig_y"])
         { }
 
+        static size_t MaxOperations(void) { return 5; }
         std::string Name(void) const override;
         std::string ToString(void) const override;
         nlohmann::json ToJSON(void) const override;
@@ -677,6 +881,7 @@ class BLS_PrivateToPublic : public Operation {
             priv(json["priv"])
         { }
 
+        static size_t MaxOperations(void) { return 5; }
         std::string Name(void) const override;
         std::string ToString(void) const override;
         nlohmann::json ToJSON(void) const override;
@@ -707,6 +912,7 @@ class BLS_Sign : public Operation {
             cleartext(json["cleartext"])
         { }
 
+        static size_t MaxOperations(void) { return 5; }
         std::string Name(void) const override;
         std::string ToString(void) const override;
         nlohmann::json ToJSON(void) const override;
@@ -741,6 +947,7 @@ class BLS_Verify : public Operation {
             signature(json["sig_r"], json["sig_y"])
         { }
 
+        static size_t MaxOperations(void) { return 5; }
         std::string Name(void) const override;
         std::string ToString(void) const override;
         nlohmann::json ToJSON(void) const override;
@@ -750,6 +957,49 @@ class BLS_Verify : public Operation {
                 (pub == rhs.pub) &&
                 (cleartext == rhs.cleartext) &&
                 (signature == rhs.signature) &&
+                (modifier == rhs.modifier);
+        }
+};
+
+class ECDH_Derive : public Operation {
+    public:
+        const component::CurveType curveType;
+        const component::ECC_PublicKey pub1;
+        const component::ECC_PublicKey pub2;
+
+        ECDH_Derive(Datasource& ds, component::Modifier modifier) :
+            Operation(std::move(modifier)),
+            curveType(ds),
+            pub1(ds),
+            pub2(ds)
+        { }
+        ECDH_Derive(nlohmann::json json) :
+            Operation(json["modifier"]),
+            curveType(json["curveType"]),
+            pub1(json["pub1_x"], json["pub1_y"]),
+            pub2(json["pub2_x"], json["pub2_y"])
+        { }
+        ECDH_Derive(
+                component::Modifier modifier,
+                component::CurveType curveType,
+                component::ECC_PublicKey pub1,
+                component::ECC_PublicKey pub2) :
+            Operation(std::move(modifier)),
+            curveType(curveType),
+            pub1(pub1),
+            pub2(pub2)
+        { }
+
+
+        static size_t MaxOperations(void) { return 5; }
+        std::string Name(void) const override;
+        std::string ToString(void) const override;
+        nlohmann::json ToJSON(void) const override;
+        inline bool operator==(const ECDH_Derive& rhs) const {
+            return
+                (curveType == rhs.curveType) &&
+                (pub1 == rhs.pub2) &&
+                (pub2 == rhs.pub2) &&
                 (modifier == rhs.modifier);
         }
 };
@@ -788,6 +1038,7 @@ class BLS_Pairing : public Operation {
             )
         { }
 
+        static size_t MaxOperations(void) { return 5; }
         std::string Name(void) const override;
         std::string ToString(void) const override;
         nlohmann::json ToJSON(void) const override;
@@ -822,6 +1073,7 @@ class BLS_HashToG1 : public Operation {
             cleartext(json["cleartext"])
         { }
 
+        static size_t MaxOperations(void) { return 5; }
         std::string Name(void) const override;
         std::string ToString(void) const override;
         nlohmann::json ToJSON(void) const override;
@@ -854,6 +1106,7 @@ class BLS_HashToG2 : public Operation {
             cleartext(json["cleartext"])
         { }
 
+        static size_t MaxOperations(void) { return 5; }
         std::string Name(void) const override;
         std::string ToString(void) const override;
         nlohmann::json ToJSON(void) const override;
@@ -861,6 +1114,61 @@ class BLS_HashToG2 : public Operation {
             return
                 (curveType == rhs.curveType) &&
                 (cleartext == rhs.cleartext) &&
+                (modifier == rhs.modifier);
+        }
+};
+
+class BignumCalc : public Operation {
+    public:
+        const component::CalcOp calcOp;
+        const component::Bignum bn0;
+        const component::Bignum bn1;
+        const component::Bignum bn2;
+        const component::Bignum bn3;
+
+        BignumCalc(Datasource& ds, component::Modifier modifier) :
+            Operation(std::move(modifier)),
+            calcOp(ds),
+            bn0(ds),
+            bn1(ds),
+            bn2(ds),
+            bn3(ds)
+        { }
+        BignumCalc(nlohmann::json json) :
+            Operation(json["modifier"]),
+            calcOp(json["calcOp"]),
+            bn0(json["bn1"]),
+            bn1(json["bn2"]),
+            bn2(json["bn3"]),
+            bn3(json["bn4"])
+        { }
+        BignumCalc(
+                component::Modifier modifier,
+                component::CurveType calcOp,
+                component::Bignum bn0,
+                component::Bignum bn1,
+                component::Bignum bn2,
+                component::Bignum bn3) :
+            Operation(std::move(modifier)),
+            calcOp(calcOp),
+            bn0(bn0),
+            bn1(bn1),
+            bn2(bn2),
+            bn3(bn3)
+        { }
+
+
+        static size_t MaxOperations(void) { return 5; }
+        std::string Name(void) const override;
+        std::string ToString(void) const override;
+        nlohmann::json ToJSON(void) const override;
+        inline bool operator==(const BignumCalc& rhs) const {
+            return
+                (calcOp == rhs.calcOp) &&
+                (bn0 == rhs.bn0) &&
+                (bn1 == rhs.bn1) &&
+                (bn2 == rhs.bn2) &&
+                (bn3 == rhs.bn3) &&
                 (modifier == rhs.modifier);
         }
 };

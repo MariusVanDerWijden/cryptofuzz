@@ -60,16 +60,15 @@ class Buffer {
             boost::algorithm::unhex(s, std::back_inserter(data));
         }
 
-        Buffer(const void* data, const size_t size) :
-            data((uint8_t*)data, (uint8_t*)data + size)
+        explicit Buffer(const std::vector<uint8_t>& data) :
+            data(data)
+        { }
+
+        Buffer(const uint8_t* data, const size_t size) :
+            data(data, data + size)
         { }
 
         Buffer(void) { }
-
-        /* Copy constructor */
-        Buffer(const Buffer& other) {
-            data = other.data;
-        }
 
         std::vector<uint8_t> Get(void) const {
             return data;
@@ -123,22 +122,21 @@ class Bignum {
         }
 
         Bignum(nlohmann::json json) :
-            data(json)
+            Bignum(json.get<std::string>())
         {
-            transform();
         }
 
         Bignum(const std::string s) :
-            data(s.data(), s.size())
+            data((const uint8_t*)s.data(), s.size())
         { }
 
-        /* Copy constructor */
-        Bignum(const Bignum& other) {
-            data = other.data;
-        }
 
         inline bool operator==(const Bignum& rhs) const {
             return data == rhs.data;
+        }
+
+        size_t GetSize(void) const {
+            return data.GetSize();
         }
 
         std::string ToString(void) const {
@@ -166,7 +164,7 @@ class Bignum {
         }
 
         nlohmann::json ToJSON(void) const {
-            return data.ToJSON();
+            return ToString();
         }
 };
 

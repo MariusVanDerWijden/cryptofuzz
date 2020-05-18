@@ -8,6 +8,7 @@
 #include <blowfish.h>
 #include <camellia.h>
 #include <cast.h>
+#include <cham.h>
 #include <crc.h>
 #include <cryptlib.h>
 #include <des.h>
@@ -20,6 +21,8 @@
 #include <idea.h>
 #include <kalyna.h>
 #include <keccak.h>
+#include <lea.h>
+#include <hight.h>
 #include <md2.h>
 #include <md4.h>
 #include <md5.h>
@@ -29,18 +32,30 @@
 #include <panama.h>
 #include <pwdbased.h>
 #include <rc2.h>
+#include <rc6.h>
 #include <ripemd.h>
 #include <scrypt.h>
+#include <safer.h>
 #include <seed.h>
 #include <serpent.h>
 #include <sha.h>
 #include <shake.h>
+#include <shark.h>
+#include <simeck.h>
+#include <simon.h>
+#include <siphash.h>
+#include <skipjack.h>
 #include <sm3.h>
 #include <sm4.h>
+#include <speck.h>
+#include <square.h>
 #include <tiger.h>
 #include <twofish.h>
 #include <whrlpool.h>
+#include <xts.h>
 #include <memory>
+
+#include "bn_ops.h"
 
 namespace cryptofuzz {
 namespace module {
@@ -174,15 +189,59 @@ namespace CryptoPP_detail {
                 return ret;
             }
     };
+
+    template <bool Is128Bit>
+    std::optional<component::MAC> SipHash(operation::HMAC& op) {
+        Datasource ds(op.modifier.GetPtr(), op.modifier.GetSize());
+        std::optional<component::MAC> ret = std::nullopt;
+
+        try {
+            ::CryptoPP::SipHash<2, 4, Is128Bit> siphash(op.cipher.key.GetPtr(), op.cipher.key.GetSize());
+            util::Multipart parts = util::ToParts(ds, op.cleartext);
+
+            /* Process */
+            for (const auto& part : parts) {
+                siphash.Update(part.first, part.second);
+            }
+
+            /* Finalize */
+            {
+                uint8_t out[::CryptoPP::SipHash<2, 4, Is128Bit>::DIGESTSIZE];
+                siphash.Final(out);
+
+                ret = component::MAC(out, ::CryptoPP::SipHash<2, 4, Is128Bit>::DIGESTSIZE);
+            }
+        } catch ( ... ) { }
+
+        return ret;
+    }
 }
 
 std::optional<component::MAC> CryptoPP::OpHMAC(operation::HMAC& op) {
-    return CryptoPP_detail::InvokeByDigest<CryptoPP_detail::HMAC, component::MAC>(op);
+    switch ( op.digestType.Get() ) {
+        case CF_DIGEST("SIPHASH64"):
+            {
+                return CryptoPP_detail::SipHash<false>(op);
+            }
+        case CF_DIGEST("SIPHASH128"):
+            {
+                return CryptoPP_detail::SipHash<true>(op);
+            }
+        default:
+            return CryptoPP_detail::InvokeByDigest<CryptoPP_detail::HMAC, component::MAC>(op);
+    }
 }
 
 namespace CryptoPP_detail {
 
-    template <class ModeCipher, size_t BlockSize, bool UseIV, bool Truncate, size_t Feedback = 0>
+    template <
+        class ModeCipher,
+        size_t BlockSize,
+        bool UseIV,
+        bool Truncate,
+        size_t Feedback = 0,
+        ::CryptoPP::BlockPaddingSchemeDef::BlockPaddingScheme Padding = ::CryptoPP::BlockPaddingSchemeDef::DEFAULT_PADDING
+    >
     std::optional<component::Ciphertext> Encrypt(operation::SymmetricEncrypt& op) {
         Datasource ds(op.modifier.GetPtr(), op.modifier.GetSize());
         std::optional<component::Ciphertext> ret = std::nullopt;
@@ -193,10 +252,10 @@ namespace CryptoPP_detail {
         /* Initialize */
         {
             typename ModeCipher::Encryption enctmp;
-            CF_CHECK_EQ(op.cipher.iv.GetSize(), BlockSize);
             if ( UseIV == false ) {
                 enc = std::make_unique<typename ModeCipher::Encryption>(op.cipher.key.GetPtr(), op.cipher.key.GetSize());
             } else {
+                CF_CHECK_EQ(op.cipher.iv.GetSize(), BlockSize);
                 if ( Feedback != 0 ) {
                     enc = std::make_unique<typename ModeCipher::Encryption>(op.cipher.key.GetPtr(), op.cipher.key.GetSize(), op.cipher.iv.GetPtr(), Feedback);
                 } else {
@@ -204,7 +263,7 @@ namespace CryptoPP_detail {
                 }
             }
 
-            encryptor = std::make_unique<::CryptoPP::StreamTransformationFilter>(*enc, nullptr);
+            encryptor = std::make_unique<::CryptoPP::StreamTransformationFilter>(*enc, nullptr, Padding);
             parts = util::ToParts(ds, op.cleartext);
         }
 
@@ -234,7 +293,14 @@ end:
         return ret;
     }
 
-    template <class ModeCipher, size_t BlockSize, bool UseIV, bool Truncate, size_t Feedback = 0>
+    template <
+        class ModeCipher,
+        size_t BlockSize,
+        bool UseIV,
+        bool Truncate,
+        size_t Feedback = 0,
+        ::CryptoPP::BlockPaddingSchemeDef::BlockPaddingScheme Padding = ::CryptoPP::BlockPaddingSchemeDef::DEFAULT_PADDING
+    >
     std::optional<component::Cleartext> Decrypt(operation::SymmetricDecrypt& op) {
         Datasource ds(op.modifier.GetPtr(), op.modifier.GetSize());
         std::optional<component::Cleartext> ret = std::nullopt;
@@ -245,10 +311,10 @@ end:
         /* Initialize */
         {
             typename ModeCipher::Decryption enctmp;
-            CF_CHECK_EQ(op.cipher.iv.GetSize(), BlockSize);
             if ( UseIV == false ) {
                 dec = std::make_unique<typename ModeCipher::Decryption>(op.cipher.key.GetPtr(), op.cipher.key.GetSize());
             } else {
+                CF_CHECK_EQ(op.cipher.iv.GetSize(), BlockSize);
                 if ( Feedback != 0 ) {
                     dec = std::make_unique<typename ModeCipher::Decryption>(op.cipher.key.GetPtr(), op.cipher.key.GetSize(), op.cipher.iv.GetPtr(), Feedback);
                 } else {
@@ -256,7 +322,7 @@ end:
                 }
             }
 
-            decryptor = std::make_unique<::CryptoPP::StreamTransformationFilter>(*dec, nullptr);
+            decryptor = std::make_unique<::CryptoPP::StreamTransformationFilter>(*dec, nullptr, Padding);
             parts = util::ToParts(ds, op.ciphertext);
         }
 
@@ -295,7 +361,7 @@ end:
 
     template <typename Cipher>
     std::optional<component::Ciphertext> CryptECB(operation::SymmetricEncrypt& op) {
-        return Encrypt<::CryptoPP::ECB_Mode<Cipher>, Cipher::BLOCKSIZE, false, true>(op);
+        return Encrypt<::CryptoPP::ECB_Mode<Cipher>, Cipher::BLOCKSIZE, false, false, 0, ::CryptoPP::BlockPaddingSchemeDef::NO_PADDING>(op);
     }
 
     template <typename Cipher>
@@ -311,6 +377,11 @@ end:
     template <typename Cipher>
     std::optional<component::Ciphertext> CryptOFB(operation::SymmetricEncrypt& op) {
         return Encrypt<::CryptoPP::OFB_Mode<Cipher>, Cipher::BLOCKSIZE, true, false>(op);
+    }
+
+    template <typename Cipher>
+    std::optional<component::Ciphertext> CryptXTS(operation::SymmetricEncrypt& op) {
+        return Encrypt<::CryptoPP::XTS_Mode<Cipher>, Cipher::BLOCKSIZE, true, false>(op);
     }
 
     template <typename Cipher>
@@ -332,7 +403,7 @@ end:
 
     template <typename Cipher>
     std::optional<component::Cleartext> CryptECB(operation::SymmetricDecrypt& op) {
-        return Decrypt<::CryptoPP::ECB_Mode<Cipher>, Cipher::BLOCKSIZE, false, true>(op);
+        return Decrypt<::CryptoPP::ECB_Mode<Cipher>, Cipher::BLOCKSIZE, false, false, 0, ::CryptoPP::BlockPaddingSchemeDef::NO_PADDING>(op);
     }
 
     template <typename Cipher>
@@ -348,6 +419,11 @@ end:
     template <typename Cipher>
     std::optional<component::Cleartext> CryptOFB(operation::SymmetricDecrypt& op) {
         return Decrypt<::CryptoPP::OFB_Mode<Cipher>, Cipher::BLOCKSIZE, true, false>(op);
+    }
+
+    template <typename Cipher>
+    std::optional<component::Cleartext> CryptXTS(operation::SymmetricDecrypt& op) {
+        return Decrypt<::CryptoPP::XTS_Mode<Cipher>, Cipher::BLOCKSIZE, true, false>(op);
     }
 
     template <typename Cipher>
@@ -495,6 +571,61 @@ end:
                         }
                     }
                     break;
+                case    CF_CIPHER("SIMON64_CFB"):
+                    {
+                        ret = CryptoPP_detail::CryptCFB< ::CryptoPP::SIMON64>(op);
+                    }
+                    break;
+                case    CF_CIPHER("SIMON128_CFB"):
+                    {
+                        ret = CryptoPP_detail::CryptCFB< ::CryptoPP::SIMON128>(op);
+                    }
+                    break;
+                case    CF_CIPHER("SPECK64_CFB"):
+                    {
+                        ret = CryptoPP_detail::CryptCFB< ::CryptoPP::SPECK64>(op);
+                    }
+                    break;
+                case    CF_CIPHER("SPECK128_CFB"):
+                    {
+                        ret = CryptoPP_detail::CryptCFB< ::CryptoPP::SPECK128>(op);
+                    }
+                    break;
+                case    CF_CIPHER("SQUARE_CFB"):
+                    {
+                        ret = CryptoPP_detail::CryptCFB< ::CryptoPP::Square>(op);
+                    }
+                    break;
+                case    CF_CIPHER("CHAM64_CFB"):
+                    {
+                        ret = CryptoPP_detail::CryptCFB< ::CryptoPP::CHAM64>(op);
+                    }
+                    break;
+                case    CF_CIPHER("CHAM128_CFB"):
+                    {
+                        ret = CryptoPP_detail::CryptCFB< ::CryptoPP::CHAM128>(op);
+                    }
+                    break;
+                case    CF_CIPHER("SIMECK32_CFB"):
+                    {
+                        ret = CryptoPP_detail::CryptCFB< ::CryptoPP::SIMECK32>(op);
+                    }
+                    break;
+                case    CF_CIPHER("SIMECK64_CFB"):
+                    {
+                        ret = CryptoPP_detail::CryptCFB< ::CryptoPP::SIMECK64>(op);
+                    }
+                    break;
+                case    CF_CIPHER("SAFER_K_CFB"):
+                    {
+                        ret = CryptoPP_detail::CryptCFB< ::CryptoPP::SAFER_K>(op);
+                    }
+                    break;
+                case    CF_CIPHER("SAFER_SK_CFB"):
+                    {
+                        ret = CryptoPP_detail::CryptCFB< ::CryptoPP::SAFER_SK>(op);
+                    }
+                    break;
 
                     /* CFB8 */
                 case    CF_CIPHER("KALYNA128_CFB8"):
@@ -589,6 +720,31 @@ end:
                         if ( op.cipher.key.GetSize() == 256 / 8) {
                             ret = CryptoPP_detail::CryptCFB< ::CryptoPP::ARIA, 1 >(op);
                         }
+                    }
+                    break;
+                case    CF_CIPHER("HIGHT_CFB"):
+                    {
+                        ret = CryptoPP_detail::CryptCFB< ::CryptoPP::HIGHT>(op);
+                    }
+                    break;
+                case    CF_CIPHER("LEA_CFB"):
+                    {
+                        ret = CryptoPP_detail::CryptCFB< ::CryptoPP::LEA>(op);
+                    }
+                    break;
+                case    CF_CIPHER("SKIPJACK_CFB"):
+                    {
+                        ret = CryptoPP_detail::CryptCFB< ::CryptoPP::SKIPJACK>(op);
+                    }
+                    break;
+                case    CF_CIPHER("RC6_CFB"):
+                    {
+                        ret = CryptoPP_detail::CryptCFB< ::CryptoPP::RC6>(op);
+                    }
+                    break;
+                case    CF_CIPHER("SHARK_CFB"):
+                    {
+                        ret = CryptoPP_detail::CryptCFB< ::CryptoPP::SHARK>(op);
                     }
                     break;
 
@@ -729,6 +885,91 @@ end:
                         }
                     }
                     break;
+                case    CF_CIPHER("HIGHT_CBC"):
+                    {
+                        ret = CryptoPP_detail::CryptCBC< ::CryptoPP::HIGHT>(op);
+                    }
+                    break;
+                case    CF_CIPHER("LEA_CBC"):
+                    {
+                        ret = CryptoPP_detail::CryptCBC< ::CryptoPP::LEA>(op);
+                    }
+                    break;
+                case    CF_CIPHER("SKIPJACK_CBC"):
+                    {
+                        ret = CryptoPP_detail::CryptCBC< ::CryptoPP::SKIPJACK>(op);
+                    }
+                    break;
+                case    CF_CIPHER("RC6_CBC"):
+                    {
+                        ret = CryptoPP_detail::CryptCBC< ::CryptoPP::RC6>(op);
+                    }
+                    break;
+                case    CF_CIPHER("SIMON64_CBC"):
+                    {
+                        ret = CryptoPP_detail::CryptCBC< ::CryptoPP::SIMON64>(op);
+                    }
+                    break;
+                case    CF_CIPHER("SIMON128_CBC"):
+                    {
+                        ret = CryptoPP_detail::CryptCBC< ::CryptoPP::SIMON128>(op);
+                    }
+                    break;
+                case    CF_CIPHER("SPECK64_CBC"):
+                    {
+                        ret = CryptoPP_detail::CryptCBC< ::CryptoPP::SPECK64>(op);
+                    }
+                    break;
+                case    CF_CIPHER("SPECK128_CBC"):
+                    {
+                        ret = CryptoPP_detail::CryptCBC< ::CryptoPP::SPECK128>(op);
+                    }
+                    break;
+                case    CF_CIPHER("SQUARE_CBC"):
+                    {
+                        ret = CryptoPP_detail::CryptCBC< ::CryptoPP::Square>(op);
+                    }
+                    break;
+                case    CF_CIPHER("CHAM64_CBC"):
+                    {
+                        ret = CryptoPP_detail::CryptCBC< ::CryptoPP::CHAM64>(op);
+                    }
+                    break;
+                case    CF_CIPHER("CHAM128_CBC"):
+                    {
+                        ret = CryptoPP_detail::CryptCBC< ::CryptoPP::CHAM128>(op);
+                    }
+                    break;
+                case    CF_CIPHER("SIMECK32_CBC"):
+                    {
+                        ret = CryptoPP_detail::CryptCBC< ::CryptoPP::SIMECK32>(op);
+                    }
+                    break;
+                case    CF_CIPHER("SIMECK64_CBC"):
+                    {
+                        ret = CryptoPP_detail::CryptCBC< ::CryptoPP::SIMECK64>(op);
+                    }
+                    break;
+                case    CF_CIPHER("SHARK_CBC"):
+                    {
+                        ret = CryptoPP_detail::CryptCBC< ::CryptoPP::SHARK>(op);
+                    }
+                    break;
+                case    CF_CIPHER("SAFER_K_CBC"):
+                    {
+                        ret = CryptoPP_detail::CryptCBC< ::CryptoPP::SAFER_K>(op);
+                    }
+                    break;
+                case    CF_CIPHER("SAFER_SK_CBC"):
+                    {
+                        ret = CryptoPP_detail::CryptCBC< ::CryptoPP::SAFER_SK>(op);
+                    }
+                    break;
+                case    CF_CIPHER("GOST-28147-89_CBC"):
+                    {
+                        ret = CryptoPP_detail::CryptCBC< ::CryptoPP::GOST >(op);
+                    }
+                    break;
 
                     /* ECB */
                 case    CF_CIPHER("KALYNA128_ECB"):
@@ -754,27 +995,29 @@ end:
                     break;
                 case    CF_CIPHER("DES_ECB"):
                     {
-                        CryptoPP_detail::CryptECB< ::CryptoPP::DES >(op);
+                        ret = CryptoPP_detail::CryptECB< ::CryptoPP::DES >(op);
                     }
                     break;
                 case    CF_CIPHER("IDEA_ECB"):
                     {
-                        CryptoPP_detail::CryptECB< ::CryptoPP::IDEA >(op);
+                        ret = CryptoPP_detail::CryptECB< ::CryptoPP::IDEA >(op);
                     }
                     break;
                 case    CF_CIPHER("SEED_ECB"):
                     {
-                        CryptoPP_detail::CryptECB< ::CryptoPP::SEED >(op);
+                        ret = CryptoPP_detail::CryptECB< ::CryptoPP::SEED >(op);
                     }
                     break;
                 case    CF_CIPHER("SM4_ECB"):
                     {
-                        CryptoPP_detail::CryptECB< ::CryptoPP::SM4 >(op);
+                        ret = CryptoPP_detail::CryptECB< ::CryptoPP::SM4 >(op);
                     }
                     break;
                 case    CF_CIPHER("RC2_ECB"):
                     {
-                        CryptoPP_detail::CryptECB< ::CryptoPP::RC2 >(op);
+                        /* Difference
+                         * ret = CryptoPP_detail::CryptECB< ::CryptoPP::RC2 >(op);
+                         */
                     }
                     break;
                 case    CF_CIPHER("BF_ECB"):
@@ -790,64 +1033,144 @@ end:
                 case    CF_CIPHER("AES_128_ECB"):
                     {
                         if ( op.cipher.key.GetSize() == 128 / 8) {
-                            CryptoPP_detail::CryptECB< ::CryptoPP::AES >(op);
+                            ret = CryptoPP_detail::CryptECB< ::CryptoPP::AES >(op);
                         }
                     }
                     break;
                 case    CF_CIPHER("AES_192_ECB"):
                     {
                         if ( op.cipher.key.GetSize() == 192 / 8) {
-                            CryptoPP_detail::CryptECB< ::CryptoPP::AES >(op);
+                            ret = CryptoPP_detail::CryptECB< ::CryptoPP::AES >(op);
                         }
                     }
                     break;
                 case    CF_CIPHER("AES_256_ECB"):
                     {
                         if ( op.cipher.key.GetSize() == 256 / 8) {
-                            CryptoPP_detail::CryptECB< ::CryptoPP::AES >(op);
+                            ret = CryptoPP_detail::CryptECB< ::CryptoPP::AES >(op);
                         }
                     }
                     break;
                 case    CF_CIPHER("CAMELLIA_128_ECB"):
                     {
                         if ( op.cipher.key.GetSize() == 128 / 8) {
-                            CryptoPP_detail::CryptECB< ::CryptoPP::Camellia >(op);
+                            ret = CryptoPP_detail::CryptECB< ::CryptoPP::Camellia >(op);
                         }
                     }
                     break;
                 case    CF_CIPHER("CAMELLIA_192_ECB"):
                     {
                         if ( op.cipher.key.GetSize() == 192 / 8) {
-                            CryptoPP_detail::CryptECB< ::CryptoPP::Camellia >(op);
+                            ret = CryptoPP_detail::CryptECB< ::CryptoPP::Camellia >(op);
                         }
                     }
                     break;
                 case    CF_CIPHER("CAMELLIA_256_ECB"):
                     {
                         if ( op.cipher.key.GetSize() == 256 / 8) {
-                            CryptoPP_detail::CryptECB< ::CryptoPP::Camellia >(op);
+                            ret = CryptoPP_detail::CryptECB< ::CryptoPP::Camellia >(op);
                         }
                     }
                     break;
                 case    CF_CIPHER("ARIA_128_ECB"):
                     {
                         if ( op.cipher.key.GetSize() == 128 / 8) {
-                            CryptoPP_detail::CryptECB< ::CryptoPP::ARIA >(op);
+                            ret = CryptoPP_detail::CryptECB< ::CryptoPP::ARIA >(op);
                         }
                     }
                     break;
                 case    CF_CIPHER("ARIA_192_ECB"):
                     {
                         if ( op.cipher.key.GetSize() == 192 / 8) {
-                            CryptoPP_detail::CryptECB< ::CryptoPP::ARIA >(op);
+                            ret = CryptoPP_detail::CryptECB< ::CryptoPP::ARIA >(op);
                         }
                     }
                     break;
                 case    CF_CIPHER("ARIA_256_ECB"):
                     {
                         if ( op.cipher.key.GetSize() == 256 / 8) {
-                            CryptoPP_detail::CryptECB< ::CryptoPP::ARIA >(op);
+                            ret = CryptoPP_detail::CryptECB< ::CryptoPP::ARIA >(op);
                         }
+                    }
+                    break;
+                case    CF_CIPHER("HIGHT_ECB"):
+                    {
+                        ret = CryptoPP_detail::CryptECB< ::CryptoPP::HIGHT>(op);
+                    }
+                    break;
+                case    CF_CIPHER("LEA_ECB"):
+                    {
+                        ret = CryptoPP_detail::CryptECB< ::CryptoPP::LEA>(op);
+                    }
+                    break;
+                case    CF_CIPHER("SKIPJACK_ECB"):
+                    {
+                        ret = CryptoPP_detail::CryptECB< ::CryptoPP::SKIPJACK>(op);
+                    }
+                    break;
+                case    CF_CIPHER("RC6_ECB"):
+                    {
+                        ret = CryptoPP_detail::CryptECB< ::CryptoPP::RC6>(op);
+                    }
+                    break;
+                case    CF_CIPHER("SIMON64_ECB"):
+                    {
+                        ret = CryptoPP_detail::CryptECB< ::CryptoPP::SIMON64>(op);
+                    }
+                    break;
+                case    CF_CIPHER("SIMON128_ECB"):
+                    {
+                        ret = CryptoPP_detail::CryptECB< ::CryptoPP::SIMON128>(op);
+                    }
+                    break;
+                case    CF_CIPHER("SPECK64_ECB"):
+                    {
+                        ret = CryptoPP_detail::CryptECB< ::CryptoPP::SPECK64>(op);
+                    }
+                    break;
+                case    CF_CIPHER("SPECK128_ECB"):
+                    {
+                        ret = CryptoPP_detail::CryptECB< ::CryptoPP::SPECK128>(op);
+                    }
+                    break;
+                case    CF_CIPHER("SQUARE_ECB"):
+                    {
+                        ret = CryptoPP_detail::CryptECB< ::CryptoPP::Square>(op);
+                    }
+                    break;
+                case    CF_CIPHER("CHAM64_ECB"):
+                    {
+                        ret = CryptoPP_detail::CryptECB< ::CryptoPP::CHAM64>(op);
+                    }
+                    break;
+                case    CF_CIPHER("CHAM128_ECB"):
+                    {
+                        ret = CryptoPP_detail::CryptECB< ::CryptoPP::CHAM128>(op);
+                    }
+                    break;
+                case    CF_CIPHER("SIMECK32_ECB"):
+                    {
+                        ret = CryptoPP_detail::CryptECB< ::CryptoPP::SIMECK32>(op);
+                    }
+                    break;
+                case    CF_CIPHER("SIMECK64_ECB"):
+                    {
+                        ret = CryptoPP_detail::CryptECB< ::CryptoPP::SIMECK64>(op);
+                    }
+                    break;
+                case    CF_CIPHER("SHARK_ECB"):
+                    {
+                        ret = CryptoPP_detail::CryptECB< ::CryptoPP::SHARK>(op);
+                    }
+                    break;
+                case    CF_CIPHER("SAFER_K_ECB"):
+                    {
+                        ret = CryptoPP_detail::CryptECB< ::CryptoPP::SAFER_K>(op);
+                    }
+                    break;
+                case    CF_CIPHER("SAFER_SK_ECB"):
+                    {
+                        ret = CryptoPP_detail::CryptECB< ::CryptoPP::SAFER_SK>(op);
                     }
                     break;
 
@@ -939,6 +1262,86 @@ end:
                         if ( op.cipher.key.GetSize() == 256 / 8) {
                             ret = CryptoPP_detail::CryptCTR< ::CryptoPP::ARIA >(op);
                         }
+                    }
+                    break;
+                case    CF_CIPHER("HIGHT_CTR"):
+                    {
+                        ret = CryptoPP_detail::CryptCTR< ::CryptoPP::HIGHT>(op);
+                    }
+                    break;
+                case    CF_CIPHER("LEA_CTR"):
+                    {
+                        ret = CryptoPP_detail::CryptCTR< ::CryptoPP::LEA>(op);
+                    }
+                    break;
+                case    CF_CIPHER("SKIPJACK_CTR"):
+                    {
+                        ret = CryptoPP_detail::CryptCTR< ::CryptoPP::SKIPJACK>(op);
+                    }
+                    break;
+                case    CF_CIPHER("RC6_CTR"):
+                    {
+                        ret = CryptoPP_detail::CryptCTR< ::CryptoPP::RC6>(op);
+                    }
+                    break;
+                case    CF_CIPHER("SIMON64_CTR"):
+                    {
+                        ret = CryptoPP_detail::CryptCTR< ::CryptoPP::SIMON64>(op);
+                    }
+                    break;
+                case    CF_CIPHER("SIMON128_CTR"):
+                    {
+                        ret = CryptoPP_detail::CryptCTR< ::CryptoPP::SIMON128>(op);
+                    }
+                    break;
+                case    CF_CIPHER("SPECK64_CTR"):
+                    {
+                        ret = CryptoPP_detail::CryptCTR< ::CryptoPP::SPECK64>(op);
+                    }
+                    break;
+                case    CF_CIPHER("SPECK128_CTR"):
+                    {
+                        ret = CryptoPP_detail::CryptCTR< ::CryptoPP::SPECK128>(op);
+                    }
+                    break;
+                case    CF_CIPHER("SQUARE_CTR"):
+                    {
+                        ret = CryptoPP_detail::CryptCTR< ::CryptoPP::Square>(op);
+                    }
+                    break;
+                case    CF_CIPHER("CHAM64_CTR"):
+                    {
+                        ret = CryptoPP_detail::CryptCTR< ::CryptoPP::CHAM64>(op);
+                    }
+                    break;
+                case    CF_CIPHER("CHAM128_CTR"):
+                    {
+                        ret = CryptoPP_detail::CryptCTR< ::CryptoPP::CHAM128>(op);
+                    }
+                    break;
+                case    CF_CIPHER("SIMECK32_CTR"):
+                    {
+                        ret = CryptoPP_detail::CryptCTR< ::CryptoPP::SIMECK32>(op);
+                    }
+                    break;
+                case    CF_CIPHER("SIMECK64_CTR"):
+                    {
+                        ret = CryptoPP_detail::CryptCTR< ::CryptoPP::SIMECK64>(op);
+                    }
+                    break;
+                case    CF_CIPHER("SHARK_CTR"):
+                    {
+                        ret = CryptoPP_detail::CryptCTR< ::CryptoPP::SHARK>(op);
+                    }
+                    break;
+                case    CF_CIPHER("SAFER_K_CTR"):
+                    {
+                        ret = CryptoPP_detail::CryptCTR< ::CryptoPP::SAFER_K>(op);
+                    }
+                    break;
+                case    CF_CIPHER("SAFER_SK_CTR"):
+                    {
+                        ret = CryptoPP_detail::CryptCTR< ::CryptoPP::SAFER_SK>(op);
                     }
                     break;
 
@@ -1074,6 +1477,109 @@ end:
                         }
                     }
                     break;
+                case    CF_CIPHER("HIGHT_OFB"):
+                    {
+                        ret = CryptoPP_detail::CryptOFB< ::CryptoPP::HIGHT>(op);
+                    }
+                    break;
+                case    CF_CIPHER("LEA_OFB"):
+                    {
+                        ret = CryptoPP_detail::CryptOFB< ::CryptoPP::LEA>(op);
+                    }
+                    break;
+                case    CF_CIPHER("SKIPJACK_OFB"):
+                    {
+                        ret = CryptoPP_detail::CryptOFB< ::CryptoPP::SKIPJACK>(op);
+                    }
+                    break;
+                case    CF_CIPHER("RC6_OFB"):
+                    {
+                        ret = CryptoPP_detail::CryptOFB< ::CryptoPP::RC6>(op);
+                    }
+                    break;
+                case    CF_CIPHER("SIMON64_OFB"):
+                    {
+                        ret = CryptoPP_detail::CryptOFB< ::CryptoPP::SIMON64>(op);
+                    }
+                    break;
+                case    CF_CIPHER("SIMON128_OFB"):
+                    {
+                        ret = CryptoPP_detail::CryptOFB< ::CryptoPP::SIMON128>(op);
+                    }
+                    break;
+                case    CF_CIPHER("SPECK64_OFB"):
+                    {
+                        ret = CryptoPP_detail::CryptOFB< ::CryptoPP::SPECK64>(op);
+                    }
+                    break;
+                case    CF_CIPHER("SPECK128_OFB"):
+                    {
+                        ret = CryptoPP_detail::CryptOFB< ::CryptoPP::SPECK128>(op);
+                    }
+                    break;
+                case    CF_CIPHER("SQUARE_OFB"):
+                    {
+                        ret = CryptoPP_detail::CryptOFB< ::CryptoPP::Square>(op);
+                    }
+                    break;
+                case    CF_CIPHER("CHAM64_OFB"):
+                    {
+                        ret = CryptoPP_detail::CryptOFB< ::CryptoPP::CHAM64>(op);
+                    }
+                    break;
+                case    CF_CIPHER("CHAM128_OFB"):
+                    {
+                        ret = CryptoPP_detail::CryptOFB< ::CryptoPP::CHAM128>(op);
+                    }
+                    break;
+                case    CF_CIPHER("SIMECK32_OFB"):
+                    {
+                        ret = CryptoPP_detail::CryptOFB< ::CryptoPP::SIMECK32>(op);
+                    }
+                    break;
+                case    CF_CIPHER("SIMECK64_OFB"):
+                    {
+                        ret = CryptoPP_detail::CryptOFB< ::CryptoPP::SIMECK64>(op);
+                    }
+                    break;
+                case    CF_CIPHER("SHARK_OFB"):
+                    {
+                        ret = CryptoPP_detail::CryptOFB< ::CryptoPP::SHARK>(op);
+                    }
+                    break;
+                case    CF_CIPHER("SAFER_K_OFB"):
+                    {
+                        ret = CryptoPP_detail::CryptOFB< ::CryptoPP::SAFER_K>(op);
+                    }
+                    break;
+                case    CF_CIPHER("SAFER_SK_OFB"):
+                    {
+                        ret = CryptoPP_detail::CryptOFB< ::CryptoPP::SAFER_SK>(op);
+                    }
+                    break;
+
+                /* XTS */
+                case    CF_CIPHER("AES_128_XTS"):
+                    {
+                        if ( op.cipher.key.GetSize() == 128 / 8) {
+                            ret = CryptoPP_detail::CryptXTS< ::CryptoPP::AES >(op);
+                        }
+                    }
+                    break;
+                case    CF_CIPHER("AES_256_XTS"):
+                    {
+                        if ( op.cipher.key.GetSize() == 256 / 8) {
+                            ret = CryptoPP_detail::CryptXTS< ::CryptoPP::AES >(op);
+                        }
+                    }
+                    break;
+                case    CF_CIPHER("AES_512_XTS"):
+                    {
+                        if ( op.cipher.key.GetSize() == 512 / 8) {
+                            ret = CryptoPP_detail::CryptXTS< ::CryptoPP::AES >(op);
+                        }
+                    }
+                    break;
 
                 /* Disabled because raw AES has been observed to output 15 bytes for
                  * a 16 byte input. Needs further inspection.. */
@@ -1092,11 +1598,6 @@ end:
                 case    CF_CIPHER("TWOFISH"):
                     {
                         ret = CryptoPP_detail::CryptRaw< ::CryptoPP::Twofish >(op);
-                    }
-                    break;
-                case    CF_CIPHER("GOST-28147-89"):
-                    {
-                        ret = CryptoPP_detail::CryptRaw< ::CryptoPP::GOST >(op);
                     }
                     break;
 #endif
@@ -1245,6 +1746,39 @@ end:
     };
 
     template <class Digest>
+    class KDF_PBKDF {
+        public:
+            static std::optional<component::Key> Compute(operation::KDF_PBKDF& op) {
+                std::optional<component::Key> ret = std::nullopt;
+
+                uint8_t* out = util::malloc(op.keySize);
+
+                try {
+                    ::CryptoPP::PKCS12_PBKDF<Digest> pbkdf1;
+                    pbkdf1.DeriveKey(
+                            out,
+                            op.keySize,
+                            1,
+                            op.password.GetPtr(),
+                            op.password.GetSize(),
+                            op.salt.GetPtr(),
+                            op.salt.GetSize(),
+                            op.iterations,
+                            0.0f);
+                } catch ( ... ) {
+                    goto end;
+                }
+
+                ret = component::Key(out, op.keySize);
+
+end:
+                util::free(out);
+
+                return ret;
+            }
+    };
+
+    template <class Digest>
     class KDF_PBKDF1 {
         public:
         static std::optional<component::Key> Compute(operation::KDF_PBKDF1& op) {
@@ -1284,6 +1818,10 @@ end:
             return ret;
         }
     };
+}
+
+std::optional<component::Key> CryptoPP::OpKDF_PBKDF(operation::KDF_PBKDF& op) {
+    return CryptoPP_detail::InvokeByDigest<CryptoPP_detail::KDF_PBKDF, component::Key>(op);
 }
 
 std::optional<component::Key> CryptoPP::OpKDF_PBKDF1(operation::KDF_PBKDF1& op) {
@@ -1391,6 +1929,118 @@ std::optional<bool> CryptoPP::OpECDSA_Verify(operation::ECDSA_Verify& op) {
     }
 
 end:
+    return ret;
+}
+
+std::optional<component::Bignum> CryptoPP::OpBignumCalc(operation::BignumCalc& op) {
+    std::optional<component::Bignum> ret = std::nullopt;
+    Datasource ds(op.modifier.GetPtr(), op.modifier.GetSize());
+
+    ::CryptoPP::Integer res("0");
+    std::vector<::CryptoPP::Integer> bn{
+        ::CryptoPP::Integer(op.bn0.ToString(ds).c_str()),
+        ::CryptoPP::Integer(op.bn1.ToString(ds).c_str()),
+        ::CryptoPP::Integer(op.bn2.ToString(ds).c_str()),
+        ::CryptoPP::Integer(op.bn3.ToString(ds).c_str())
+    };
+    std::unique_ptr<CryptoPP_bignum::Operation> opRunner = nullptr;
+
+    switch ( op.calcOp.Get() ) {
+        case    CF_CALCOP("Add(A,B)"):
+            opRunner = std::make_unique<CryptoPP_bignum::Add>();
+            break;
+        case    CF_CALCOP("Sub(A,B)"):
+            opRunner = std::make_unique<CryptoPP_bignum::Sub>();
+            break;
+        case    CF_CALCOP("Mul(A,B)"):
+            opRunner = std::make_unique<CryptoPP_bignum::Mul>();
+            break;
+        case    CF_CALCOP("Div(A,B)"):
+            opRunner = std::make_unique<CryptoPP_bignum::Div>();
+            break;
+        case    CF_CALCOP("ExpMod(A,B,C)"):
+            opRunner = std::make_unique<CryptoPP_bignum::ExpMod>();
+            break;
+        case    CF_CALCOP("Sqr(A)"):
+            opRunner = std::make_unique<CryptoPP_bignum::Sqr>();
+            break;
+        case    CF_CALCOP("GCD(A,B)"):
+            opRunner = std::make_unique<CryptoPP_bignum::GCD>();
+            break;
+        case    CF_CALCOP("SqrMod(A,B)"):
+            opRunner = std::make_unique<CryptoPP_bignum::SqrMod>();
+            break;
+        case    CF_CALCOP("InvMod(A,B)"):
+            opRunner = std::make_unique<CryptoPP_bignum::InvMod>();
+            break;
+        case    CF_CALCOP("MulMod(A,B,C)"):
+            opRunner = std::make_unique<CryptoPP_bignum::MulMod>();
+            break;
+        case    CF_CALCOP("Cmp(A,B)"):
+            opRunner = std::make_unique<CryptoPP_bignum::Cmp>();
+            break;
+        case    CF_CALCOP("LCM(A,B)"):
+            opRunner = std::make_unique<CryptoPP_bignum::LCM>();
+            break;
+        case    CF_CALCOP("Abs(A)"):
+            opRunner = std::make_unique<CryptoPP_bignum::Abs>();
+            break;
+        case    CF_CALCOP("Jacobi(A,B)"):
+            opRunner = std::make_unique<CryptoPP_bignum::Jacobi>();
+            break;
+        case    CF_CALCOP("Neg(A)"):
+            opRunner = std::make_unique<CryptoPP_bignum::Neg>();
+            break;
+        case    CF_CALCOP("IsNeg(A)"):
+            opRunner = std::make_unique<CryptoPP_bignum::IsNeg>();
+            break;
+        case    CF_CALCOP("IsEq(A,B)"):
+            opRunner = std::make_unique<CryptoPP_bignum::IsEq>();
+            break;
+        case    CF_CALCOP("IsZero(A)"):
+            opRunner = std::make_unique<CryptoPP_bignum::IsZero>();
+            break;
+        case    CF_CALCOP("And(A,B)"):
+            opRunner = std::make_unique<CryptoPP_bignum::And>();
+            break;
+        case    CF_CALCOP("Or(A,B)"):
+            opRunner = std::make_unique<CryptoPP_bignum::Or>();
+            break;
+        case    CF_CALCOP("Xor(A,B)"):
+            opRunner = std::make_unique<CryptoPP_bignum::Xor>();
+            break;
+        case    CF_CALCOP("IsEven(A)"):
+            opRunner = std::make_unique<CryptoPP_bignum::IsEven>();
+            break;
+        case    CF_CALCOP("IsOdd(A)"):
+            opRunner = std::make_unique<CryptoPP_bignum::IsOdd>();
+            break;
+        case    CF_CALCOP("Bit(A,B)"):
+            opRunner = std::make_unique<CryptoPP_bignum::Bit>();
+            break;
+        case    CF_CALCOP("CmpAbs(A,B)"):
+            opRunner = std::make_unique<CryptoPP_bignum::CmpAbs>();
+            break;
+        case    CF_CALCOP("SetBit(A,B)"):
+            opRunner = std::make_unique<CryptoPP_bignum::SetBit>();
+            break;
+        case    CF_CALCOP("ClearBit(A,B)"):
+            opRunner = std::make_unique<CryptoPP_bignum::ClearBit>();
+            break;
+    }
+
+    CF_CHECK_NE(opRunner, nullptr);
+
+    try {
+        CF_CHECK_EQ(opRunner->Run(ds, res, bn), true);
+    } catch ( ... ) {
+        goto end;
+    }
+
+    ret = { IntToString(res, 10) };
+
+end:
+
     return ret;
 }
 

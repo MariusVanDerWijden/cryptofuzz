@@ -103,8 +103,7 @@ std::optional<component::ECC_PublicKey> Golang::OpECC_PrivateToPublic(operation:
     auto jsonStr = op.ToJSON().dump();
     Golang_Cryptofuzz_OpECC_PrivateToPublic(toGoSlice(jsonStr));
 
-    return std::nullopt;
-    //return getResultAs<component::ECC_PublicKey>();
+    return getResultAs<component::ECC_PublicKey>();
 }
 
 std::optional<bool> Golang::OpECDSA_Verify(operation::ECDSA_Verify& op) {
@@ -113,6 +112,13 @@ std::optional<bool> Golang::OpECDSA_Verify(operation::ECDSA_Verify& op) {
 
     return std::nullopt;
     //return getResultAs<component::bool>();
+}
+
+std::optional<component::Bignum> Golang::OpBignumCalc(operation::BignumCalc& op) {
+    auto jsonStr = op.ToJSON().dump();
+    Golang_Cryptofuzz_OpBignumCalc(toGoSlice(jsonStr));
+
+    return getResultAs<component::Bignum>();
 }
 
 } /* namespace module */

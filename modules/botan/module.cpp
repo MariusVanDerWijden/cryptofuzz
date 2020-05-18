@@ -3,14 +3,17 @@
 #include <cryptofuzz/repository.h>
 #include <botan/hash.h>
 #include <botan/mac.h>
+#include <botan/cmac.h>
 #include <botan/cipher_mode.h>
 #include <botan/pbkdf.h>
 #include <botan/pwdhash.h>
+#include <botan/kdf.h>
 #include <botan/system_rng.h>
 #include <botan/bigint.h>
 #include <botan/ecdsa.h>
 #include <botan/pubkey.h>
 #include <botan/ber_dec.h>
+#include "bn_ops.h"
 
 namespace cryptofuzz {
 namespace module {
@@ -30,12 +33,25 @@ namespace Botan_detail {
         return parent + pOpen + child + pClose;
     }
 
-    std::optional<std::string> DigestIDToString(const uint64_t digestType) {
+    std::optional<std::string> DigestIDToString(const uint64_t digestType, const bool altShake = false, const bool isHmac = false) {
 #include "digest_string_lut.h"
         std::optional<std::string> ret = std::nullopt;
 
         CF_CHECK_NE(LUT.find(digestType), LUT.end());
-        ret = LUT.at(digestType);
+
+        if ( isHmac == false ) {
+            if (    digestType == CF_DIGEST("SIPHASH64") ||
+                    digestType == CF_DIGEST("SIPHASH128") ) {
+                return std::nullopt;
+            }
+        }
+        if ( altShake == true && digestType == CF_DIGEST("SHAKE128") ) {
+            ret = "SHAKE-128(256)";
+        } else if ( altShake == true && digestType == CF_DIGEST("SHAKE256") ) {
+            ret = "SHAKE-256(512)";
+        } else {
+            ret = LUT.at(digestType);
+        }
 end:
         return ret;
     }
@@ -98,16 +114,13 @@ std::optional<component::MAC> Botan::OpHMAC(operation::HMAC& op) {
     try {
         /* Initialize */
         {
-            std::optional<std::string> algoString;
-            CF_CHECK_NE(algoString = Botan_detail::DigestIDToString(op.digestType.Get()), std::nullopt);
-            std::string algoStringCopy = *algoString;
-            if ( algoStringCopy == "SHAKE-128(128)" ) {
-                algoStringCopy = "SHAKE-128(256)";
-            } else if ( algoStringCopy == "SHAKE-256(256)" ) {
-                algoStringCopy = "SHAKE-256(512)";
-            }
 
-            const std::string hmacString = Botan_detail::parenthesize("HMAC", algoStringCopy);
+            std::optional<std::string> algoString;
+            CF_CHECK_NE(algoString = Botan_detail::DigestIDToString(op.digestType.Get(), true, true), std::nullopt);
+
+            const bool isSipHash = op.digestType.Get() == CF_DIGEST("SIPHASH64");
+
+            const std::string hmacString = isSipHash ? *algoString : Botan_detail::parenthesize("HMAC", *algoString);
             CF_CHECK_NE(hmac = ::Botan::MessageAuthenticationCode::create(hmacString), nullptr);
 
             try {
@@ -138,12 +151,12 @@ end:
 
 namespace Botan_detail {
 
-    std::optional<std::string> CipherIDToString(const uint64_t digestType) {
+    std::optional<std::string> CipherIDToString(const uint64_t digestType, const bool withMode = true) {
 #include "cipher_string_lut.h"
         std::optional<std::string> ret = std::nullopt;
 
         CF_CHECK_NE(LUT.find(digestType), LUT.end());
-        ret = LUT.at(digestType);
+        ret = withMode ? LUT.at(digestType).first : LUT.at(digestType).second;
 end:
         return ret;
     }
@@ -256,12 +269,160 @@ end:
 
 } /* namespace Botan_detail */
 
+std::optional<component::MAC> Botan::OpCMAC(operation::CMAC& op) {
+    if ( op.cipher.cipherType.Get() != CF_CIPHER("AES_128_CBC") ) {
+        return {};
+    }
+    Datasource ds(op.modifier.GetPtr(), op.modifier.GetSize());
+    std::optional<component::MAC> ret = std::nullopt;
+    std::unique_ptr<::Botan::CMAC> cmac = nullptr;
+    std::unique_ptr<::Botan::BlockCipher> cipher = nullptr;
+    util::Multipart parts;
+
+    const ::Botan::SymmetricKey key(op.cipher.key.GetPtr(), op.cipher.key.GetSize());
+
+    try {
+        /* Initialize */
+        {
+            {
+                std::optional<std::string> algoString;
+                CF_CHECK_NE(algoString = Botan_detail::CipherIDToString(op.cipher.cipherType.Get(), false), std::nullopt);
+
+                CF_CHECK_NE(cipher = ::Botan::BlockCipher::create(*algoString), nullptr);
+            }
+
+            CF_CHECK_NE(cmac = std::make_unique<::Botan::CMAC>(cipher->clone()), nullptr);
+            cmac->set_key(key);
+
+            parts = util::ToParts(ds, op.cleartext);
+        }
+
+        /* Process */
+        for (const auto& part : parts) {
+            cmac->update(part.first, part.second);
+        }
+
+        /* Finalize */
+        {
+            const auto res = cmac->final();
+            ret = component::MAC(res.data(), res.size());
+        }
+
+    } catch ( ... ) { }
+
+end:
+    return ret;
+}
+
 std::optional<component::Ciphertext> Botan::OpSymmetricEncrypt(operation::SymmetricEncrypt& op) {
     return Botan_detail::Crypt<component::Ciphertext, operation::SymmetricEncrypt>(op);
 }
 
 std::optional<component::Cleartext> Botan::OpSymmetricDecrypt(operation::SymmetricDecrypt& op) {
     return Botan_detail::Crypt<component::Cleartext, operation::SymmetricDecrypt>(op);
+}
+
+std::optional<component::Key> Botan::OpKDF_SCRYPT(operation::KDF_SCRYPT& op) {
+    std::optional<component::Key> ret = std::nullopt;
+    std::unique_ptr<::Botan::PasswordHashFamily> pwdhash_fam = nullptr;
+    std::unique_ptr<::Botan::PasswordHash> pwdhash = nullptr;
+    uint8_t* out = util::malloc(op.keySize);
+
+    try {
+        /* Initialize */
+        {
+            CF_CHECK_NE(pwdhash_fam = ::Botan::PasswordHashFamily::create("Scrypt"), nullptr);
+            CF_CHECK_NE(pwdhash = pwdhash_fam->from_params(op.N, op.r, op.p), nullptr);
+
+        }
+
+        /* Process */
+        {
+            pwdhash->derive_key(
+                    out,
+                    op.keySize,
+                    (const char*)op.password.GetPtr(),
+                    op.password.GetSize(),
+                    op.salt.GetPtr(),
+                    op.salt.GetSize());
+        }
+
+        /* Finalize */
+        {
+            ret = component::Key(out, op.keySize);
+        }
+    } catch ( ... ) { }
+
+end:
+    util::free(out);
+
+    return ret;
+}
+
+std::optional<component::Key> Botan::OpKDF_HKDF(operation::KDF_HKDF& op) {
+    std::optional<component::Key> ret = std::nullopt;
+    std::unique_ptr<::Botan::KDF> hkdf = nullptr;
+
+    try {
+        {
+            std::optional<std::string> algoString;
+            CF_CHECK_NE(algoString = Botan_detail::DigestIDToString(op.digestType.Get(), true), std::nullopt);
+
+            const std::string hkdfString = Botan_detail::parenthesize("HKDF", *algoString);
+            hkdf = ::Botan::KDF::create(hkdfString);
+        }
+
+        {
+            auto derived = hkdf->derive_key(op.keySize, op.password.Get(), op.salt.Get(), op.info.Get());
+
+            /* Workaround for an anomaly in Botan: https://github.com/randombit/botan/issues/2347 */
+            CF_CHECK_GTE(derived.size(), op.keySize);
+
+            ret = component::Key(derived.data(), derived.size());
+        }
+    } catch ( ... ) { }
+
+end:
+    return ret;
+}
+
+std::optional<component::Key> Botan::OpKDF_PBKDF1(operation::KDF_PBKDF1& op) {
+    std::optional<component::Key> ret = std::nullopt;
+    std::unique_ptr<::Botan::PBKDF> pbkdf1 = nullptr;
+    uint8_t* out = util::malloc(op.keySize);
+
+    try {
+        /* Initialize */
+        {
+            std::optional<std::string> algoString;
+            CF_CHECK_NE(algoString = Botan_detail::DigestIDToString(op.digestType.Get(), true), std::nullopt);
+
+            const std::string pbkdf1String = Botan_detail::parenthesize("PBKDF1", *algoString);
+            CF_CHECK_NE(pbkdf1 = ::Botan::PBKDF::create(pbkdf1String), nullptr);
+        }
+
+        /* Process */
+        {
+            const std::string passphrase(op.password.GetPtr(), op.password.GetPtr() + op.password.GetSize());
+            pbkdf1->pbkdf_iterations(
+                    out,
+                    op.keySize,
+                    passphrase,
+                    op.salt.GetPtr(),
+                    op.salt.GetSize(),
+                    op.iterations);
+        }
+
+        /* Finalize */
+        {
+            ret = component::Key(out, op.keySize);
+        }
+    } catch ( ... ) { }
+
+end:
+    util::free(out);
+
+    return ret;
 }
 
 std::optional<component::Key> Botan::OpKDF_PBKDF2(operation::KDF_PBKDF2& op) {
@@ -274,19 +435,68 @@ std::optional<component::Key> Botan::OpKDF_PBKDF2(operation::KDF_PBKDF2& op) {
         /* Initialize */
         {
             std::optional<std::string> algoString;
-            CF_CHECK_NE(algoString = Botan_detail::DigestIDToString(op.digestType.Get()), std::nullopt);
-            std::string algoStringCopy = *algoString;
-            if ( algoStringCopy == "SHAKE-128(128)" ) {
-                algoStringCopy = "SHAKE-128(256)";
-            } else if ( algoStringCopy == "SHAKE-256(256)" ) {
-                algoStringCopy = "SHAKE-256(512)";
-            }
+            CF_CHECK_NE(algoString = Botan_detail::DigestIDToString(op.digestType.Get(), true), std::nullopt);
 
-            const std::string pbkdf2String = Botan_detail::parenthesize("PBKDF2", algoStringCopy);
+            const std::string pbkdf2String = Botan_detail::parenthesize("PBKDF2", *algoString);
             CF_CHECK_NE(pwdhash_fam = ::Botan::PasswordHashFamily::create(pbkdf2String), nullptr);
 
             CF_CHECK_NE(pwdhash = pwdhash_fam->from_params(op.iterations), nullptr);
 
+        }
+
+        /* Process */
+        {
+            pwdhash->derive_key(
+                    out,
+                    op.keySize,
+                    (const char*)op.password.GetPtr(),
+                    op.password.GetSize(),
+                    op.salt.GetPtr(),
+                    op.salt.GetSize());
+        }
+
+        /* Finalize */
+        {
+            ret = component::Key(out, op.keySize);
+        }
+    } catch ( ... ) { }
+
+end:
+    util::free(out);
+
+    return ret;
+}
+
+std::optional<component::Key> Botan::OpKDF_ARGON2(operation::KDF_ARGON2& op) {
+    std::optional<component::Key> ret = std::nullopt;
+    std::unique_ptr<::Botan::PasswordHashFamily> pwdhash_fam = nullptr;
+    std::unique_ptr<::Botan::PasswordHash> pwdhash = nullptr;
+    uint8_t* out = util::malloc(op.keySize);
+
+    try {
+        /* Initialize */
+        {
+            std::string argon2String;
+
+            switch ( op.type ) {
+                case    0:
+                    argon2String = "Argon2d";
+                    break;
+                case    1:
+                    argon2String = "Argon2i";
+                    break;
+                case    2:
+                    argon2String = "Argon2id";
+                    break;
+                default:
+                    goto end;
+            }
+            CF_CHECK_NE(pwdhash_fam = ::Botan::PasswordHashFamily::create(argon2String), nullptr);
+
+            CF_CHECK_NE(pwdhash = pwdhash_fam->from_params(
+                        op.memory,
+                        op.iterations,
+                        op.threads), nullptr);
         }
 
         /* Process */
@@ -446,6 +656,140 @@ std::optional<bool> Botan::OpECDSA_Verify(operation::ECDSA_Verify& op) {
 
         ret = verifier.verify_message(op.cleartext.Get(), sig);
     } catch ( ... ) { }
+
+end:
+    return ret;
+}
+
+std::optional<component::Bignum> Botan::OpBignumCalc(operation::BignumCalc& op) {
+    std::optional<component::Bignum> ret = std::nullopt;
+    Datasource ds(op.modifier.GetPtr(), op.modifier.GetSize());
+
+    ::Botan::BigInt res("0");
+    std::vector<::Botan::BigInt> bn{
+        ::Botan::BigInt(op.bn0.ToString(ds)),
+        ::Botan::BigInt(op.bn1.ToString(ds)),
+        ::Botan::BigInt(op.bn2.ToString(ds)),
+        ::Botan::BigInt(op.bn3.ToString(ds))
+    };
+    std::unique_ptr<Botan_bignum::Operation> opRunner = nullptr;
+
+    switch ( op.calcOp.Get() ) {
+        case    CF_CALCOP("Add(A,B)"):
+            opRunner = std::make_unique<Botan_bignum::Add>();
+            break;
+        case    CF_CALCOP("Sub(A,B)"):
+            opRunner = std::make_unique<Botan_bignum::Sub>();
+            break;
+        case    CF_CALCOP("Mul(A,B)"):
+            opRunner = std::make_unique<Botan_bignum::Mul>();
+            break;
+        case    CF_CALCOP("Div(A,B)"):
+            opRunner = std::make_unique<Botan_bignum::Div>();
+            break;
+        case    CF_CALCOP("Mod(A,B)"):
+            opRunner = std::make_unique<Botan_bignum::Mod>();
+            break;
+        case    CF_CALCOP("ExpMod(A,B,C)"):
+            opRunner = std::make_unique<Botan_bignum::ExpMod>();
+            break;
+        case    CF_CALCOP("Sqr(A)"):
+            opRunner = std::make_unique<Botan_bignum::Sqr>();
+            break;
+        case    CF_CALCOP("GCD(A,B)"):
+            opRunner = std::make_unique<Botan_bignum::GCD>();
+            break;
+        case    CF_CALCOP("SqrMod(A,B)"):
+            opRunner = std::make_unique<Botan_bignum::SqrMod>();
+            break;
+        case    CF_CALCOP("InvMod(A,B)"):
+            opRunner = std::make_unique<Botan_bignum::InvMod>();
+            break;
+        case    CF_CALCOP("Cmp(A,B)"):
+            opRunner = std::make_unique<Botan_bignum::Cmp>();
+            break;
+        case    CF_CALCOP("LCM(A,B)"):
+            opRunner = std::make_unique<Botan_bignum::LCM>();
+            break;
+        case    CF_CALCOP("Abs(A)"):
+            opRunner = std::make_unique<Botan_bignum::Abs>();
+            break;
+        case    CF_CALCOP("Jacobi(A,B)"):
+            opRunner = std::make_unique<Botan_bignum::Jacobi>();
+            break;
+        case    CF_CALCOP("Neg(A)"):
+            opRunner = std::make_unique<Botan_bignum::Neg>();
+            break;
+        case    CF_CALCOP("IsPrime(A)"):
+            opRunner = std::make_unique<Botan_bignum::IsPrime>();
+            break;
+        case    CF_CALCOP("RShift(A,B)"):
+            opRunner = std::make_unique<Botan_bignum::RShift>();
+            break;
+        case    CF_CALCOP("LShift1(A)"):
+            opRunner = std::make_unique<Botan_bignum::LShift1>();
+            break;
+        case    CF_CALCOP("IsNeg(A)"):
+            opRunner = std::make_unique<Botan_bignum::IsNeg>();
+            break;
+        case    CF_CALCOP("IsEq(A,B)"):
+            opRunner = std::make_unique<Botan_bignum::IsEq>();
+            break;
+        case    CF_CALCOP("IsEven(A)"):
+            opRunner = std::make_unique<Botan_bignum::IsEven>();
+            break;
+        case    CF_CALCOP("IsOdd(A)"):
+            opRunner = std::make_unique<Botan_bignum::IsOdd>();
+            break;
+        case    CF_CALCOP("IsZero(A)"):
+            opRunner = std::make_unique<Botan_bignum::IsZero>();
+            break;
+        case    CF_CALCOP("IsOne(A)"):
+            opRunner = std::make_unique<Botan_bignum::IsOne>();
+            break;
+        case    CF_CALCOP("MulMod(A,B,C)"):
+            opRunner = std::make_unique<Botan_bignum::MulMod>();
+            break;
+        case    CF_CALCOP("Bit(A,B)"):
+            opRunner = std::make_unique<Botan_bignum::Bit>();
+            break;
+        case    CF_CALCOP("CmpAbs(A,B)"):
+            opRunner = std::make_unique<Botan_bignum::CmpAbs>();
+            break;
+        case    CF_CALCOP("SetBit(A,B)"):
+            opRunner = std::make_unique<Botan_bignum::SetBit>();
+            break;
+        case    CF_CALCOP("Mod_NIST_192(A)"):
+            opRunner = std::make_unique<Botan_bignum::Mod_NIST_192>();
+            break;
+        case    CF_CALCOP("Mod_NIST_224(A)"):
+            opRunner = std::make_unique<Botan_bignum::Mod_NIST_224>();
+            break;
+        case    CF_CALCOP("Mod_NIST_256(A)"):
+            opRunner = std::make_unique<Botan_bignum::Mod_NIST_256>();
+            break;
+        case    CF_CALCOP("Mod_NIST_384(A)"):
+            opRunner = std::make_unique<Botan_bignum::Mod_NIST_384>();
+            break;
+        case    CF_CALCOP("Mod_NIST_521(A)"):
+            opRunner = std::make_unique<Botan_bignum::Mod_NIST_521>();
+            break;
+        case    CF_CALCOP("ClearBit(A,B)"):
+            opRunner = std::make_unique<Botan_bignum::ClearBit>();
+            break;
+    }
+
+    CF_CHECK_NE(opRunner, nullptr);
+
+    try {
+        CF_CHECK_EQ(opRunner->Run(ds, res, bn), true);
+    } catch ( ... ) {
+        goto end;
+    }
+
+    ret = { res.is_negative() ?
+            ("-" + res.to_dec_string()) :
+            res.to_dec_string() };
 
 end:
     return ret;

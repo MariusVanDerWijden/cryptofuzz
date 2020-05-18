@@ -26,6 +26,12 @@ extern "C" {
     #include "argon2/include/argon2.h"
 }
 
+#if 0
+extern "C" {
+    #include "blake3/blake3.h"
+}
+#endif
+
 namespace cryptofuzz {
 namespace module {
 
@@ -187,6 +193,65 @@ std::optional<component::Digest> Reference::XXHASH32(operation::Digest& op, Data
     }
 }
 
+#if 0
+std::optional<component::Digest> Reference::BLAKE3(operation::Digest& op, Datasource& ds) const {
+    std::optional<component::Digest> ret = std::nullopt;
+
+    blake3_hasher hasher;
+    util::Multipart parts;
+    uint8_t out[BLAKE3_OUT_LEN];
+
+    /* Initialize */
+    {
+        parts = util::ToParts(ds, op.cleartext);
+        /* noret */ blake3_hasher_init(&hasher);
+    }
+
+    /* Process */
+    for (const auto& part : parts) {
+        /* noret */ blake3_hasher_update(&hasher, part.first, part.second);
+    }
+
+    /* Finalize */
+    {
+        /* noret */ blake3_hasher_finalize(&hasher, out, sizeof(out));
+        ret = component::Digest(out, sizeof(out));
+    }
+
+    return ret;
+}
+
+/* Note: this is not an actual HMAC */
+std::optional<component::MAC> Reference::BLAKE3_MAC(operation::HMAC& op, Datasource& ds) const {
+    std::optional<component::MAC> ret = std::nullopt;
+
+    blake3_hasher hasher;
+    util::Multipart parts;
+    uint8_t out[BLAKE3_OUT_LEN];
+
+    /* Initialize */
+    {
+        CF_CHECK_EQ(op.cipher.key.GetSize(), BLAKE3_KEY_LEN);
+        parts = util::ToParts(ds, op.cleartext);
+        /* noret */ blake3_hasher_init_keyed(&hasher, op.cipher.key.GetPtr());
+    }
+
+    /* Process */
+    for (const auto& part : parts) {
+        /* noret */ blake3_hasher_update(&hasher, part.first, part.second);
+    }
+
+    /* Finalize */
+    {
+        /* noret */ blake3_hasher_finalize(&hasher, out, sizeof(out));
+        ret = component::MAC(out, sizeof(out));
+    }
+
+end:
+    return ret;
+}
+#endif
+
 std::optional<component::Digest> Reference::OpDigest(operation::Digest& op) {
     using fuzzing::datasource::ID;
     Datasource ds(op.modifier.GetPtr(), op.modifier.GetSize());
@@ -286,6 +351,13 @@ std::optional<component::Digest> Reference::OpDigest(operation::Digest& op) {
                 return XXHASH32(op, ds);
             }
             break;
+#if 0
+        case CF_DIGEST("BLAKE3"):
+            {
+                return BLAKE3(op, ds);
+            }
+            break;
+#endif
     }
 
     return ret;
@@ -353,6 +425,14 @@ std::optional<component::MAC> Reference::OpHMAC(operation::HMAC& op) {
                     }
                 }
 #endif
+            }
+            break;
+#endif
+#if 0
+        case CF_DIGEST("BLAKE3"):
+            {
+                Datasource ds(op.modifier.GetPtr(), op.modifier.GetSize());
+                return BLAKE3_MAC(op, ds);
             }
             break;
 #endif

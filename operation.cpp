@@ -31,6 +31,7 @@ std::string HMAC::ToString(void) const {
 
     ss << "operation name: HMAC" << std::endl;
     ss << "digest: " << repository::DigestToString(digestType.Get()) << std::endl;
+    ss << "key: " << util::HexDump(cipher.key.Get()) << std::endl;
     ss << "cleartext: " << util::HexDump(cleartext.Get()) << std::endl;
 
     return ss.str();
@@ -188,6 +189,31 @@ nlohmann::json KDF_TLS1_PRF::ToJSON(void) const {
     return j;
 }
 
+std::string KDF_PBKDF::Name(void) const { return "KDF_PBKDF"; }
+std::string KDF_PBKDF::ToString(void) const {
+    std::stringstream ss;
+
+    ss << "operation name: KDF_PBKDF" << std::endl;
+    ss << "digest: " << repository::DigestToString(digestType.Get()) << std::endl;
+    ss << "password: " << util::HexDump(password.Get()) << std::endl;
+    ss << "salt: " << util::HexDump(salt.Get()) << std::endl;
+    ss << "iterations: " << std::to_string(iterations) << std::endl;
+    ss << "keySize: " << std::to_string(keySize) << std::endl;
+
+    return ss.str();
+}
+
+nlohmann::json KDF_PBKDF::ToJSON(void) const {
+    nlohmann::json j;
+    j["digestType"] = digestType.ToJSON();
+    j["password"] = password.ToJSON();
+    j["salt"] = salt.ToJSON();
+    j["iterations"] = iterations;
+    j["keySize"] = keySize;
+    j["modifier"] = modifier.ToJSON();
+    return j;
+}
+
 std::string KDF_PBKDF1::Name(void) const { return "KDF_PBKDF1"; }
 std::string KDF_PBKDF1::ToString(void) const {
     std::stringstream ss;
@@ -293,6 +319,85 @@ nlohmann::json KDF_SSH::ToJSON(void) const {
     return j;
 }
 
+std::string KDF_X963::Name(void) const { return "KDF_X963"; }
+std::string KDF_X963::ToString(void) const {
+    std::stringstream ss;
+
+    ss << "operation name: KDF_X963" << std::endl;
+    ss << "digest: " << repository::DigestToString(digestType.Get()) << std::endl;
+    ss << "secret: " << util::HexDump(secret.Get()) << std::endl;
+    ss << "info: " << util::HexDump(info.Get()) << std::endl;
+    ss << "keySize: " << std::to_string(keySize) << std::endl;
+
+    return ss.str();
+}
+
+nlohmann::json KDF_X963::ToJSON(void) const {
+    nlohmann::json j;
+    j["digestType"] = digestType.ToJSON();
+    j["secret"] = secret.ToJSON();
+    j["info"] = info.ToJSON();
+    j["keySize"] = keySize;
+    j["modifier"] = modifier.ToJSON();
+    return j;
+}
+
+std::string KDF_BCRYPT::Name(void) const { return "KDF_BCRYPT"; }
+std::string KDF_BCRYPT::ToString(void) const {
+    std::stringstream ss;
+
+    ss << "operation name: KDF_BCRYPT" << std::endl;
+    ss << "digest: " << repository::DigestToString(digestType.Get()) << std::endl;
+    ss << "secret: " << util::HexDump(secret.Get()) << std::endl;
+    ss << "salt: " << util::HexDump(salt.Get()) << std::endl;
+    ss << "iterations: " << std::to_string(iterations) << std::endl;
+    ss << "keySize: " << std::to_string(keySize) << std::endl;
+
+    return ss.str();
+}
+
+nlohmann::json KDF_BCRYPT::ToJSON(void) const {
+    nlohmann::json j;
+    j["digestType"] = digestType.ToJSON();
+    j["secret"] = secret.ToJSON();
+    j["salt"] = salt.ToJSON();
+    j["iterations"] = iterations;
+    j["keySize"] = keySize;
+    j["modifier"] = modifier.ToJSON();
+    return j;
+}
+
+std::string KDF_SP_800_108::Name(void) const { return "KDF_SP_800_108"; }
+std::string KDF_SP_800_108::ToString(void) const {
+    std::stringstream ss;
+
+    ss << "operation name: KDF_SP_800_108" << std::endl;
+    ss << "hmac/cmac: " << (mech.mode ? "HMAC" : "CMAC") << std::endl;
+    if ( mech.mode == true ) {
+        ss << "digest: " << repository::DigestToString(mech.type.Get()) << std::endl;
+    } else {
+        ss << "cipher: " << repository::CipherToString(mech.type.Get()) << std::endl;
+    }
+    ss << "secret: " << util::HexDump(secret.Get()) << std::endl;
+    ss << "salt: " << util::HexDump(salt.Get()) << std::endl;
+    ss << "label: " << util::HexDump(label.Get()) << std::endl;
+    ss << "mode: " << std::to_string(mode) << std::endl;
+    ss << "keySize: " << std::to_string(keySize) << std::endl;
+
+    return ss.str();
+}
+
+nlohmann::json KDF_SP_800_108::ToJSON(void) const {
+    nlohmann::json j;
+    j["mech"] = mech.ToJSON();
+    j["secret"] = secret.ToJSON();
+    j["salt"] = salt.ToJSON();
+    j["label"] = label.ToJSON();
+    j["mode"] = mode;
+    j["modifier"] = modifier.ToJSON();
+    return j;
+}
+
 std::string CMAC::Name(void) const { return "CMAC"; }
 std::string CMAC::ToString(void) const {
     std::stringstream ss;
@@ -372,6 +477,22 @@ nlohmann::json ECC_PrivateToPublic::ToJSON(void) const {
     j["modifier"] = modifier.ToJSON();
     return j;
 }
+std::string ECC_GenerateKeyPair::Name(void) const { return "ECC_GenerateKeyPair"; }
+std::string ECC_GenerateKeyPair::ToString(void) const {
+    std::stringstream ss;
+
+    ss << "operation name: ECC_GenerateKeyPair" << std::endl;
+    ss << "ecc curve: " << repository::ECC_CurveToString(curveType.Get()) << std::endl;
+
+    return ss.str();
+}
+
+nlohmann::json ECC_GenerateKeyPair::ToJSON(void) const {
+    nlohmann::json j;
+    j["curveType"] = curveType.ToJSON();
+    j["modifier"] = modifier.ToJSON();
+    return j;
+}
 
 std::string ECDSA_Sign::Name(void) const { return "ECDSA_Sign"; }
 std::string ECDSA_Sign::ToString(void) const {
@@ -431,10 +552,35 @@ std::string BLS_PrivateToPublic::ToString(void) const {
     return ss.str();
 }
 
+std::string ECDH_Derive::Name(void) const { return "ECDH_Derive"; }
+std::string ECDH_Derive::ToString(void) const {
+    std::stringstream ss;
+
+    ss << "operation name: ECDH_Derive" << std::endl;
+    ss << "ecc curve: " << repository::ECC_CurveToString(curveType.Get()) << std::endl;
+    ss << "public key 1 X: " << pub1.first.ToString() << std::endl;
+    ss << "public key 1 Y: " << pub1.second.ToString() << std::endl;
+    ss << "public key 2 X: " << pub2.first.ToString() << std::endl;
+    ss << "public key 2 Y: " << pub2.second.ToString() << std::endl;
+
+    return ss.str();
+}
+
 nlohmann::json BLS_PrivateToPublic::ToJSON(void) const {
     nlohmann::json j;
     j["priv"] = priv.ToJSON();
     j["curveType"] = curveType.ToJSON();
+    j["modifier"] = modifier.ToJSON();
+    return j;
+}
+
+nlohmann::json ECDH_Derive::ToJSON(void) const {
+    nlohmann::json j;
+    j["curveType"] = curveType.ToJSON();
+    j["pub1_x"] = pub1.first.ToJSON();
+    j["pub1_y"] = pub1.second.ToJSON();
+    j["pub2_x"] = pub2.first.ToJSON();
+    j["pub2_y"] = pub2.second.ToJSON();
     j["modifier"] = modifier.ToJSON();
     return j;
 }
@@ -488,6 +634,19 @@ std::string BLS_Pairing::ToString(void) const {
     ss << "operation name: BLS_Pairing" << std::endl;
     ss << "ecc curve: " << repository::ECC_CurveToString(curveType.Get()) << std::endl;
     /* TODO q,p */
+    return ss.str();
+}
+
+std::string BignumCalc::Name(void) const { return "BignumCalc"; }
+std::string BignumCalc::ToString(void) const {
+    std::stringstream ss;
+
+    ss << "operation name: BignumCalc" << std::endl;
+    ss << "calc operation: " << repository::CalcOpToString(calcOp.Get()) << std::endl;
+    ss << "bignum 1: " << bn0.ToString() << std::endl;
+    ss << "bignum 2: " << bn1.ToString() << std::endl;
+    ss << "bignum 3: " << bn2.ToString() << std::endl;
+    ss << "bignum 4: " << bn3.ToString() << std::endl;
 
     return ss.str();
 }
@@ -534,6 +693,17 @@ nlohmann::json BLS_HashToG2::ToJSON(void) const {
     nlohmann::json j;
     j["curveType"] = curveType.ToJSON();
     j["cleartext"] = cleartext.ToJSON();
+    j["modifier"] = modifier.ToJSON();
+    return j;
+}
+
+nlohmann::json BignumCalc::ToJSON(void) const {
+    nlohmann::json j;
+    j["calcOp"] = calcOp.ToJSON();
+    j["bn0"] = bn0.ToJSON();
+    j["bn1"] = bn1.ToJSON();
+    j["bn2"] = bn2.ToJSON();
+    j["bn3"] = bn3.ToJSON();
     j["modifier"] = modifier.ToJSON();
     return j;
 }

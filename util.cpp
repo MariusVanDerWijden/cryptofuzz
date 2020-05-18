@@ -8,6 +8,7 @@
 #include <vector>
 #include <cstdlib>
 #include <boost/algorithm/string/join.hpp>
+#include <boost/multiprecision/cpp_int.hpp>
 #include "third_party/cpu_features/include/cpuinfo_x86.h"
 
 namespace cryptofuzz {
@@ -96,6 +97,31 @@ Multipart ToParts(fuzzing::datasource::Datasource& ds, const uint8_t* data, cons
     }
 
     return ret;
+}
+
+std::vector<uint8_t> Pkcs7Pad(std::vector<uint8_t> in, const size_t blocksize) {
+    size_t numPadBytes = blocksize - (in.size() % blocksize);
+
+    const uint8_t padByte = static_cast<uint8_t>(numPadBytes);
+    for (size_t i = 0; i < numPadBytes; i++) {
+        in.push_back(padByte);
+    }
+
+    return in;
+}
+
+std::optional<std::vector<uint8_t>> Pkcs7Unpad(std::vector<uint8_t> in, const size_t blocksize) {
+    if ( in.size() == 0 || (in.size() % blocksize) != 0 ) {
+        return std::nullopt;
+    }
+
+    const auto numPadBytes = static_cast<size_t>(in.back());
+
+    if ( numPadBytes > in.size() ) {
+        return std::nullopt;
+    }
+
+    return std::vector<uint8_t>(in.data(), in.data() + in.size() - numPadBytes);
 }
 
 std::string HexDump(const void *_data, const size_t len, const std::string description) {
@@ -196,9 +222,28 @@ std::string ToString(const component::G2& val) {
 
     ret += "Y2: ";
     ret += val.second.second.ToString();
+}
+
+std::string ToString(const component::ECC_KeyPair& val) {
+    std::string ret;
+
+    ret += "Priv: ";
+    ret += val.priv.ToString();
+    ret += "\n";
+
+    ret += "X: ";
+    ret += val.pub.first.ToString();
+    ret += "\n";
+
+    ret += "Y: ";
+    ret += val.pub.second.ToString();
     ret += "\n";
 
     return ret;
+}
+
+std::string ToString(const component::Bignum& val) {
+    return val.ToString();
 }
 
 class HaveBadPointer {
@@ -259,6 +304,70 @@ void abort(const std::vector<std::string> components) {
     printf("Assertion failure: %s\n", joined.c_str());
     fflush(stdout);
     ::abort();
+}
+
+static int HexCharToDec(const char c) {
+    if ( c >= '0' && c <= '9' ) {
+        return c - '0';
+    } else if ( c >= 'a' && c <= 'f' ) {
+        return c - 'a' + 10;
+    } else if ( c >= 'A' && c <= 'F' ) {
+        return c - 'A' + 10;
+    } else {
+        assert(0);
+    }
+}
+
+std::string HexToDec(std::string s) {
+    std::string ret;
+    bool negative = false;
+
+    if ( s.empty() ) {
+        return ret;
+    }
+
+    if ( s.size() >= 2 && s[0] == '0' && s[1] == 'x' ) {
+        s = s.substr(2);
+    }
+
+    if ( s.size() >= 1 && s[0] == '-' ) {
+        s = s.substr(1);
+        negative = true;
+    }
+
+    boost::multiprecision::cpp_int total;
+
+    for (long i = s.size() - 1; i >= 0; i--) {
+        total += boost::multiprecision::cpp_int(HexCharToDec(s[i])) << ((s.size()-i-1)*4);
+    }
+
+    std::stringstream ss;
+    if ( negative ) ss << "-";
+    ss << total;
+
+    if ( ss.str().empty() ) {
+        return "0";
+    } else {
+        return ss.str();
+    }
+}
+
+std::string DecToHex(std::string s) {
+    s.erase(0, s.find_first_not_of('0'));
+    boost::multiprecision::cpp_int i(s);
+    bool negative;
+    if ( i < 0 ) {
+        negative = true;
+        i -= (i*2);
+    } else {
+        negative = false;
+    }
+    std::stringstream ss;
+    if ( negative == true ) {
+        ss << "-";
+    }
+    ss << std::hex << i;
+    return ss.str();
 }
 
 } /* namespace util */

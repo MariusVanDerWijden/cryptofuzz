@@ -3,12 +3,16 @@
 #include <cryptofuzz/repository.h>
 #include <fuzzing/datasource/id.hpp>
 #include <openssl/aes.h>
+#if defined(CRYPTOFUZZ_BORINGSSL)
+#include <openssl/siphash.h>
+#endif
 #if !defined(CRYPTOFUZZ_BORINGSSL) && !defined(CRYPTOFUZZ_LIBRESSL) && !defined(CRYPTOFUZZ_OPENSSL_102) && !defined(CRYPTOFUZZ_OPENSSL_111) && !defined(CRYPTOFUZZ_OPENSSL_110)
 #include <openssl/kdf.h>
 #include <openssl/core_names.h>
 #endif
 
 #include "module_internal.h"
+#include "bn_ops.h"
 
 namespace cryptofuzz {
 namespace module {
@@ -59,8 +63,21 @@ OpenSSL::OpenSSL(void) :
 }
 
 
-bool OpenSSL::isAEAD(const EVP_CIPHER* ctx) const {
-    return EVP_CIPHER_flags(ctx) & EVP_CIPH_FLAG_AEAD_CIPHER;
+bool OpenSSL::isAEAD(const EVP_CIPHER* ctx, const uint64_t cipherType) const {
+    bool ret = false;
+
+    /* Special TLS AEAD ciphers that should not be attempted to use with aad/tag or
+     * non-default iv/key sizes */
+    CF_CHECK_NE(cipherType, CF_CIPHER("RC4_HMAC_MD5"));
+    CF_CHECK_NE(cipherType, CF_CIPHER("AES_128_CBC_HMAC_SHA1"));
+    CF_CHECK_NE(cipherType, CF_CIPHER("AES_256_CBC_HMAC_SHA1"));
+    CF_CHECK_NE(cipherType, CF_CIPHER("AES_128_CBC_HMAC_SHA256"));
+    CF_CHECK_NE(cipherType, CF_CIPHER("AES_256_CBC_HMAC_SHA256"));
+
+    ret = EVP_CIPHER_flags(ctx) & EVP_CIPH_FLAG_AEAD_CIPHER;
+
+end:
+    return ret;
 }
 
 const EVP_MD* OpenSSL::toEVPMD(const component::DigestType& digestType) const {
@@ -76,6 +93,7 @@ const EVP_MD* OpenSSL::toEVPMD(const component::DigestType& digestType) const {
         { CF_DIGEST("MD4"), EVP_md4() },
         { CF_DIGEST("MD5"), EVP_md5() },
         { CF_DIGEST("MD5_SHA1"), EVP_md5_sha1() },
+        { CF_DIGEST("SHA512-256"), EVP_sha512_256() },
 #elif defined(CRYPTOFUZZ_LIBRESSL)
         { CF_DIGEST("SHA1"), EVP_sha1() },
         { CF_DIGEST("SHA224"), EVP_sha224() },
@@ -1269,8 +1287,93 @@ end:
 }
 #endif
 
+namespace OpenSSL_detail {
+    std::optional<component::MAC> SipHash(operation::HMAC& op) {
+        std::optional<component::MAC> ret = std::nullopt;
+#if defined(CRYPTOFUZZ_BORINGSSL)
+        if ( op.digestType.Get() != CF_DIGEST("SIPHASH64") ) {
+            return ret;
+        }
+        if ( op.cipher.key.GetSize() != 16 ) {
+            return ret;
+        }
+
+        uint64_t key[2];
+        memcpy(&key[0], op.cipher.key.GetPtr(), 8);
+        memcpy(&key[1], op.cipher.key.GetPtr() + 8, 8);
+
+        const auto ret_uint64_t = SIPHASH_24(key, op.cleartext.GetPtr(), op.cleartext.GetSize());
+
+        uint8_t ret_uint8_t[8];
+        static_assert(sizeof(ret_uint8_t) == sizeof(ret_uint64_t));
+
+        memcpy(ret_uint8_t, &ret_uint64_t, sizeof(ret_uint8_t));
+
+        ret = component::MAC(ret_uint8_t, sizeof(ret_uint8_t));
+
+        return ret;
+#elif defined(CRYPTOFUZZ_LIBRESSL)
+        (void)op;
+#else
+        Datasource ds(op.modifier.GetPtr(), op.modifier.GetSize());
+
+        size_t macSize;
+        util::Multipart parts;
+        uint8_t* out = nullptr;
+
+        EVP_MAC* siphash = nullptr;
+        EVP_MAC_CTX *ctx = nullptr;
+        OSSL_PARAM params[3], *p = params;
+
+        /* Initialize */
+        {
+            macSize = op.digestType.Get() == CF_DIGEST("SIPHASH64") ? 8 : 16;
+            parts = util::ToParts(ds, op.cleartext);
+            siphash = EVP_MAC_fetch(nullptr, "SIPHASH", nullptr);
+            ctx = EVP_MAC_CTX_new(siphash);
+            CF_CHECK_EQ(EVP_MAC_init(ctx), 1);
+
+            auto keyCopy = op.cipher.key.Get();
+            *p++ = OSSL_PARAM_construct_octet_string(
+                    OSSL_MAC_PARAM_KEY,
+                    keyCopy.data(),
+                    keyCopy.size());
+
+            unsigned int macSize_ui = macSize;
+            *p++ = OSSL_PARAM_construct_uint(OSSL_MAC_PARAM_SIZE, &macSize_ui);
+
+            *p = OSSL_PARAM_construct_end();
+            CF_CHECK_EQ(EVP_MAC_CTX_set_params(ctx, params), 1);
+            out = util::malloc(macSize);
+        }
+
+        /* Process */
+        for (const auto& part : parts) {
+            CF_CHECK_EQ(EVP_MAC_update(ctx, part.first, part.second), 1);
+        }
+
+        /* Finalize */
+        CF_CHECK_EQ(EVP_MAC_final(ctx, out, &macSize, macSize), 1);
+        ret = component::MAC(out, macSize);
+end:
+        util::free(out);
+
+        EVP_MAC_CTX_free(ctx);
+        EVP_MAC_free(siphash);
+
+#endif
+        return ret;
+    }
+}
+
 std::optional<component::MAC> OpenSSL::OpHMAC(operation::HMAC& op) {
     Datasource ds(op.modifier.GetPtr(), op.modifier.GetSize());
+
+    if (    op.digestType.Get() == CF_DIGEST("SIPHASH64") ||
+            op.digestType.Get() == CF_DIGEST("SIPHASH128") ) {
+        /* Not HMAC but invoking SipHash here anyway due to convenience. */
+        return OpenSSL_detail::SipHash(op);
+    }
 
     bool useEVP = true;
     try {
@@ -1295,32 +1398,47 @@ std::optional<component::MAC> OpenSSL::OpHMAC(operation::HMAC& op) {
 
 
 bool OpenSSL::checkSetIVLength(const uint64_t cipherType, const EVP_CIPHER* cipher, EVP_CIPHER_CTX* ctx, const size_t inputIvLength) const {
-    (void)cipherType;
-    (void)ctx;
-
     bool ret = false;
 
     const size_t ivLength = EVP_CIPHER_iv_length(cipher);
-    if ( ivLength != inputIvLength ) {
-#if defined(CRYPTOFUZZ_LIBRESSL) || defined(CRYPTOFUZZ_OPENSSL_102)
-        if ( repository::IsCCM( cipherType ) ) {
-            CF_CHECK_EQ(EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_CCM_SET_IVLEN, inputIvLength, nullptr), 1);
-            ret = true;
-        } else if ( repository::IsGCM( cipherType ) ) {
-            CF_CHECK_EQ(EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, inputIvLength, nullptr), 1);
-            ret = true;
-        }
-#else
-        if ( isAEAD(cipher) == true ) {
-            CF_CHECK_EQ(EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_AEAD_SET_IVLEN, inputIvLength, nullptr), 1);
-            ret = true;
-        }
-#endif
-    } else {
-        return true;
+    const bool ivLengthMismatch = ivLength != inputIvLength;
+
+    if ( isAEAD(cipher, cipherType) == false ) {
+        /* Return true (success) if input IV length is expected IV length */
+        return !ivLengthMismatch;
     }
 
+    const bool isCCM = repository::IsCCM( cipherType );
+#if defined(CRYPTOFUZZ_LIBRESSL) || defined(CRYPTOFUZZ_OPENSSL_102)
+    const bool isGCM = repository::IsGCM( cipherType );
+#endif
+
+    /* Only AEAD ciphers past this point */
+
+    /* EVP_CIPHER_iv_length may return the wrong default IV length for CCM ciphers.
+     * Eg. EVP_CIPHER_iv_length returns 12 for EVP_aes_128_ccm() even though the
+     * IV length is actually.
+     *
+     * Hence, with CCM ciphers set the desired IV length always.
+     */
+
+    if ( isCCM || ivLengthMismatch ) {
+#if defined(CRYPTOFUZZ_LIBRESSL) || defined(CRYPTOFUZZ_OPENSSL_102)
+        if ( isCCM == true ) {
+            CF_CHECK_EQ(EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_CCM_SET_IVLEN, inputIvLength, nullptr), 1);
+        } else if ( isGCM == true ) {
+            CF_CHECK_EQ(EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, inputIvLength, nullptr), 1);
+        } else {
+            return false;
+        }
+#else
+        CF_CHECK_EQ(EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_AEAD_SET_IVLEN, inputIvLength, nullptr), 1);
+#endif
+    }
+
+    ret = true;
 end:
+
     return ret;
 }
 
@@ -1445,14 +1563,7 @@ std::optional<component::Ciphertext> OpenSSL::OpSymmetricEncrypt_EVP(operation::
              * leads to all kinds of gnarly memory bugs in OpenSSL.
              * It is quite arguably misuse of the OpenSSL API, so don't do this.
              */
-            CF_CHECK_EQ(isAEAD(cipher), true);
-
-            /* Special TLS AEAD ciphers that should not be attempted to use with aad/tag */
-            CF_CHECK_NE(op.cipher.cipherType.Get(), CF_CIPHER("RC4_HMAC_MD5"));
-            CF_CHECK_NE(op.cipher.cipherType.Get(), CF_CIPHER("AES_128_CBC_HMAC_SHA1"));
-            CF_CHECK_NE(op.cipher.cipherType.Get(), CF_CIPHER("AES_256_CBC_HMAC_SHA1"));
-            CF_CHECK_NE(op.cipher.cipherType.Get(), CF_CIPHER("AES_128_CBC_HMAC_SHA256"));
-            CF_CHECK_NE(op.cipher.cipherType.Get(), CF_CIPHER("AES_256_CBC_HMAC_SHA256"));
+            CF_CHECK_EQ(isAEAD(cipher, op.cipher.cipherType.Get()), true);
         }
 
         CF_CHECK_EQ(EVP_EncryptInit_ex(ctx.GetPtr(), cipher, nullptr, nullptr, nullptr), 1);
@@ -1475,10 +1586,22 @@ std::optional<component::Ciphertext> OpenSSL::OpSymmetricEncrypt_EVP(operation::
             }
         }
 
-        CF_CHECK_EQ(checkSetIVLength(op.cipher.cipherType.Get(), cipher, ctx.GetPtr(), op.cipher.iv.GetSize()), true);
+        if ( op.cipher.cipherType.Get() != CF_CIPHER("CHACHA20") ) {
+            CF_CHECK_EQ(checkSetIVLength(op.cipher.cipherType.Get(), cipher, ctx.GetPtr(), op.cipher.iv.GetSize()), true);
+        } else {
+            CF_CHECK_EQ(op.cipher.iv.GetSize(), 12);
+        }
         CF_CHECK_EQ(checkSetKeyLength(cipher, ctx.GetPtr(), op.cipher.key.GetSize()), true);
 
-        CF_CHECK_EQ(EVP_EncryptInit_ex(ctx.GetPtr(), nullptr, nullptr, op.cipher.key.GetPtr(), op.cipher.iv.GetPtr()), 1);
+        if ( op.cipher.cipherType.Get() != CF_CIPHER("CHACHA20") ) {
+            CF_CHECK_EQ(EVP_EncryptInit_ex(ctx.GetPtr(), nullptr, nullptr, op.cipher.key.GetPtr(), op.cipher.iv.GetPtr()), 1);
+        } else {
+            /* Prepend the 32 bit counter (which is 0) to the iv */
+            uint8_t cc20IV[16];
+            memset(cc20IV, 0, 4);
+            memcpy(cc20IV + 4, op.cipher.iv.GetPtr(), op.cipher.iv.GetSize());
+            CF_CHECK_EQ(EVP_EncryptInit_ex(ctx.GetPtr(), nullptr, nullptr, op.cipher.key.GetPtr(), cc20IV), 1);
+        }
 
         /* Disable ECB padding for consistency with mbed TLS */
         if ( repository::IsECB(op.cipher.cipherType.Get()) ) {
@@ -1488,15 +1611,16 @@ std::optional<component::Ciphertext> OpenSSL::OpSymmetricEncrypt_EVP(operation::
 
     /* Process */
     {
+        /* If the cipher is CCM, the total cleartext size needs to be indicated explicitly
+         * https://wiki.openssl.org/index.php/EVP_Authenticated_Encryption_and_Decryption
+         */
+        if ( repository::IsCCM(op.cipher.cipherType.Get()) == true ) {
+            int len;
+            CF_CHECK_EQ(EVP_EncryptUpdate(ctx.GetPtr(), nullptr, &len, nullptr, op.cleartext.GetSize()), 1);
+        }
+
         /* Set AAD */
         if ( op.aad != std::nullopt ) {
-            /* If the cipher is CCM, the total cleartext size needs to be indicated explicitly
-             * https://wiki.openssl.org/index.php/EVP_Authenticated_Encryption_and_Decryption
-             */
-            if ( repository::IsCCM(op.cipher.cipherType.Get()) == true ) {
-                int len;
-                CF_CHECK_EQ(EVP_EncryptUpdate(ctx.GetPtr(), nullptr, &len, nullptr, op.cleartext.GetSize()), 1);
-            }
 
             for (const auto& part : partsAAD) {
                 int len;
@@ -1861,14 +1985,7 @@ std::optional<component::Cleartext> OpenSSL::OpSymmetricDecrypt_EVP(operation::S
              * leads to all kinds of gnarly memory bugs in OpenSSL.
              * It is quite arguably misuse of the OpenSSL API, so don't do this.
              */
-            CF_CHECK_EQ(isAEAD(cipher), true);
-
-            /* Special TLS AEAD ciphers that should not be attempted to use with aad/tag */
-            CF_CHECK_NE(op.cipher.cipherType.Get(), CF_CIPHER("RC4_HMAC_MD5"));
-            CF_CHECK_NE(op.cipher.cipherType.Get(), CF_CIPHER("AES_128_CBC_HMAC_SHA1"));
-            CF_CHECK_NE(op.cipher.cipherType.Get(), CF_CIPHER("AES_256_CBC_HMAC_SHA1"));
-            CF_CHECK_NE(op.cipher.cipherType.Get(), CF_CIPHER("AES_128_CBC_HMAC_SHA256"));
-            CF_CHECK_NE(op.cipher.cipherType.Get(), CF_CIPHER("AES_256_CBC_HMAC_SHA256"));
+            CF_CHECK_EQ(isAEAD(cipher, op.cipher.cipherType.Get()), true);
         }
         CF_CHECK_EQ(EVP_DecryptInit_ex(ctx.GetPtr(), cipher, nullptr, nullptr, nullptr), 1);
 
@@ -1889,7 +2006,11 @@ std::optional<component::Cleartext> OpenSSL::OpSymmetricDecrypt_EVP(operation::S
             }
         }
 
-        CF_CHECK_EQ(checkSetIVLength(op.cipher.cipherType.Get(), cipher, ctx.GetPtr(), op.cipher.iv.GetSize()), true);
+        if ( op.cipher.cipherType.Get() != CF_CIPHER("CHACHA20") ) {
+            CF_CHECK_EQ(checkSetIVLength(op.cipher.cipherType.Get(), cipher, ctx.GetPtr(), op.cipher.iv.GetSize()), true);
+        } else {
+            CF_CHECK_EQ(op.cipher.iv.GetSize(), 12);
+        }
         CF_CHECK_EQ(checkSetKeyLength(cipher, ctx.GetPtr(), op.cipher.key.GetSize()), true);
 
 #if !defined(CRYPTOFUZZ_LIBRESSL) && !defined(CRYPTOFUZZ_OPENSSL_102)
@@ -1906,8 +2027,15 @@ std::optional<component::Cleartext> OpenSSL::OpSymmetricDecrypt_EVP(operation::S
             CF_CHECK_EQ(EVP_CIPHER_CTX_ctrl(ctx.GetPtr(), EVP_CTRL_AEAD_SET_TAG, op.tag->GetSize(), (void*)op.tag->GetPtr()), 1);
         }
 #endif
-
-        CF_CHECK_EQ(EVP_DecryptInit_ex(ctx.GetPtr(), nullptr, nullptr, op.cipher.key.GetPtr(), op.cipher.iv.GetPtr()), 1);
+        if ( op.cipher.cipherType.Get() != CF_CIPHER("CHACHA20") ) {
+            CF_CHECK_EQ(EVP_DecryptInit_ex(ctx.GetPtr(), nullptr, nullptr, op.cipher.key.GetPtr(), op.cipher.iv.GetPtr()), 1);
+        } else {
+            /* Prepend the 32 bit counter (which is 0) to the iv */
+            uint8_t cc20IV[16];
+            memset(cc20IV, 0, 4);
+            memcpy(cc20IV + 4, op.cipher.iv.GetPtr(), op.cipher.iv.GetSize());
+            CF_CHECK_EQ(EVP_DecryptInit_ex(ctx.GetPtr(), nullptr, nullptr, op.cipher.key.GetPtr(), cc20IV), 1);
+        }
 
         /* Disable ECB padding for consistency with mbed TLS */
         if ( repository::IsECB(op.cipher.cipherType.Get()) ) {
@@ -1917,17 +2045,16 @@ std::optional<component::Cleartext> OpenSSL::OpSymmetricDecrypt_EVP(operation::S
 
     /* Process */
     {
+        /* If the cipher is CCM, the total cleartext size needs to be indicated explicitly
+         * https://wiki.openssl.org/index.php/EVP_Authenticated_Encryption_and_Decryption
+         */
+        if ( repository::IsCCM(op.cipher.cipherType.Get()) == true ) {
+            int len;
+            CF_CHECK_EQ(EVP_DecryptUpdate(ctx.GetPtr(), nullptr, &len, nullptr, op.ciphertext.GetSize()), 1);
+        }
+
         /* Set AAD */
         if ( op.aad != std::nullopt ) {
-
-            /* If the cipher is CCM, the total cleartext size needs to be indicated explicitly
-             * https://wiki.openssl.org/index.php/EVP_Authenticated_Encryption_and_Decryption
-             */
-            if ( repository::IsCCM(op.cipher.cipherType.Get()) == true ) {
-                int len;
-                CF_CHECK_EQ(EVP_DecryptUpdate(ctx.GetPtr(), nullptr, &len, nullptr, op.ciphertext.GetSize()), 1);
-            }
-
             for (const auto& part : partsAAD) {
                 int len;
                 CF_CHECK_EQ(EVP_DecryptUpdate(ctx.GetPtr(), nullptr, &len, part.first, part.second), 1);
@@ -2532,7 +2659,7 @@ end:
     return ret;
 }
 #endif
-    
+
 #if !defined(CRYPTOFUZZ_BORINGSSL) && !defined(CRYPTOFUZZ_LIBRESSL) && !defined(CRYPTOFUZZ_OPENSSL_102) && !defined(CRYPTOFUZZ_OPENSSL_111) && !defined(CRYPTOFUZZ_OPENSSL_110)
 std::optional<component::Key> OpenSSL::OpKDF_SSH(operation::KDF_SSH& op) {
     std::optional<component::Key> ret = std::nullopt;
@@ -2544,6 +2671,7 @@ std::optional<component::Key> OpenSSL::OpKDF_SSH(operation::KDF_SSH& op) {
     /* Initialize */
     {
         CF_CHECK_NE(md = toEVPMD(op.digestType), nullptr);
+        CF_CHECK_EQ(op.type.GetSize(), 1);
 
         std::string mdName(EVP_MD_name(md));
         *p++ = OSSL_PARAM_construct_utf8_string(OSSL_KDF_PARAM_DIGEST, mdName.data(), mdName.size() + 1);
@@ -2574,6 +2702,63 @@ std::optional<component::Key> OpenSSL::OpKDF_SSH(operation::KDF_SSH& op) {
 
         {
             EVP_KDF* kdf = EVP_KDF_fetch(nullptr, OSSL_KDF_NAME_SSHKDF, nullptr);
+            CF_CHECK_NE(kdf, nullptr);
+            kctx = EVP_KDF_CTX_new(kdf);
+            EVP_KDF_free(kdf);
+            CF_CHECK_NE(kctx, nullptr);
+        }
+
+        CF_CHECK_EQ(EVP_KDF_CTX_set_params(kctx, params), 1);
+    }
+
+    /* Process */
+    {
+        CF_CHECK_GT(EVP_KDF_derive(kctx, out, op.keySize), 0);
+    }
+
+    /* Finalize */
+    {
+        ret = component::Key(out, op.keySize);
+    }
+
+end:
+    EVP_KDF_CTX_free(kctx);
+
+    util::free(out);
+
+    return ret;
+}
+
+std::optional<component::Key> OpenSSL::OpKDF_X963(operation::KDF_X963& op) {
+    std::optional<component::Key> ret = std::nullopt;
+    EVP_KDF_CTX* kctx = nullptr;
+    const EVP_MD* md = nullptr;
+    OSSL_PARAM params[4], *p = params;
+    uint8_t* out = util::malloc(op.keySize);
+
+    /* Initialize */
+    {
+        CF_CHECK_NE(md = toEVPMD(op.digestType), nullptr);
+
+        std::string mdName(EVP_MD_name(md));
+        *p++ = OSSL_PARAM_construct_utf8_string(OSSL_KDF_PARAM_DIGEST, mdName.data(), mdName.size() + 1);
+
+        auto secretCopy = op.secret.Get();
+        *p++ = OSSL_PARAM_construct_octet_string(
+                OSSL_KDF_PARAM_SECRET,
+                secretCopy.data(),
+                secretCopy.size());
+
+        auto infoCopy = op.info.Get();
+        *p++ = OSSL_PARAM_construct_octet_string(
+                OSSL_KDF_PARAM_INFO,
+                infoCopy.data(),
+                infoCopy.size());
+
+        *p = OSSL_PARAM_construct_end();
+
+        {
+            EVP_KDF* kdf = EVP_KDF_fetch(nullptr, "X963KDF", nullptr);
             CF_CHECK_NE(kdf, nullptr);
             kctx = EVP_KDF_CTX_new(kdf);
             EVP_KDF_free(kdf);
@@ -2732,6 +2917,11 @@ end:
     return ret;
 }
 
+/* LibreSSL uses getentropy() in ECC operations.
+ * MemorySanitizer erroneously does not unpoison the destination buffer.
+ * https://github.com/google/sanitizers/issues/1173
+ */
+#if !(defined(CRYPTOFUZZ_LIBRESSL) && defined(SANITIZER_MSAN))
 static std::optional<int> toCurveNID(const component::CurveType& curveType) {
     static const std::map<uint64_t, int> LUT = {
         { CF_ECC_CURVE("brainpool160r1"), NID_brainpoolP160r1 },
@@ -2825,113 +3015,28 @@ static std::optional<int> toCurveNID(const component::CurveType& curveType) {
     return LUT.at(curveType.Get());
 }
 
-namespace OpenSSL_detail {
-    class Bignum {
-        private:
-            BIGNUM* bn = nullptr;
-            Datasource& ds;
-            bool locked = false;
-        public:
-            Bignum(Datasource& ds) :
-                ds(ds)
-            { }
-
-            ~Bignum() {
-                if ( locked == false ) {
-                    BN_free(bn);
-                }
-            }
-
-            void Lock(void) {
-                locked = true;
-            }
-
-            bool New(void) {
-                if ( locked == true ) {
-                    printf("Cannot renew locked Bignum\n");
-                    abort();
-                }
-
-                BN_free(bn);
-                bn = BN_new();
-
-                return bn != nullptr;
-            }
-
-            bool Set(const std::string s) {
-                if ( locked == true ) {
-                    printf("Cannot set locked Bignum\n");
-                    abort();
-                }
-
-                bool ret = false;
-
-                CF_CHECK_NE(BN_dec2bn(&bn, s.c_str()), 0);
-
-                ret = true;
-            end:
-                return ret;
-            }
-
-            BIGNUM* GetPtr(const bool allowDup = true) {
-                if ( locked == false ) {
-                    try {
-                        {
-                            const bool changeConstness = ds.Get<bool>();
-                            if ( changeConstness == true ) {
-#if !defined(CRYPTOFUZZ_BORINGSSL)
-                                const bool constness = ds.Get<bool>();
-
-                                if ( constness == true ) {
-                                    /* noret */ BN_set_flags(bn, BN_FLG_CONSTTIME);
-                                } else {
-                                    /* noret */ BN_set_flags(bn, 0);
-                                }
-#endif
-                            }
-                        }
-
-                        {
-                            if ( allowDup == true ) {
-                                const bool dup = ds.Get<bool>();
-
-                                if ( dup == true ) {
-                                    BIGNUM* tmp = BN_dup(bn);
-                                    if ( tmp != nullptr ) {
-                                        BN_free(bn);
-                                        bn = tmp;
-                                    }
-                                }
-                            }
-                        }
-                    } catch ( ... ) { }
-                }
-
-                return bn;
-            }
-    };
-};
-
 std::optional<component::ECC_PublicKey> OpenSSL::OpECC_PrivateToPublic(operation::ECC_PrivateToPublic& op) {
     std::optional<component::ECC_PublicKey> ret = std::nullopt;
     Datasource ds(op.modifier.GetPtr(), op.modifier.GetSize());
 
     CF_EC_KEY key(ds);
-    EC_GROUP* group = nullptr;
-    OpenSSL_detail::Bignum prv(ds);
-    EC_POINT* pub = nullptr;
-    OpenSSL_detail::Bignum pub_x(ds);
-    OpenSSL_detail::Bignum pub_y(ds);
+    std::shared_ptr<CF_EC_GROUP> group = nullptr;
+    OpenSSL_bignum::Bignum prv(ds);
+    std::unique_ptr<CF_EC_POINT> pub = nullptr;
+    OpenSSL_bignum::Bignum pub_x(ds);
+    OpenSSL_bignum::Bignum pub_y(ds);
     char* pub_x_str = nullptr;
     char* pub_y_str = nullptr;
 
     {
         std::optional<int> curveNID;
         CF_CHECK_NE(curveNID = toCurveNID(op.curveType), std::nullopt);
-        CF_CHECK_NE(group = EC_GROUP_new_by_curve_name(*curveNID), nullptr);
+        CF_CHECK_NE(group = std::make_shared<CF_EC_GROUP>(ds, *curveNID), nullptr);
+        group->Lock();
+        CF_CHECK_NE(group->GetPtr(), nullptr);
     }
 
-    CF_CHECK_EQ(EC_KEY_set_group(key.GetPtr(), group), 1);
+    CF_CHECK_EQ(EC_KEY_set_group(key.GetPtr(), group->GetPtr()), 1);
 
     /* Load private key */
     CF_CHECK_EQ(prv.Set(op.priv.ToString(ds)), true);
@@ -2940,16 +3045,16 @@ std::optional<component::ECC_PublicKey> OpenSSL::OpECC_PrivateToPublic(operation
     CF_CHECK_EQ(EC_KEY_set_private_key(key.GetPtr(), prv.GetPtr()), 1);
 
     /* Compute public key */
-    CF_CHECK_NE(pub = EC_POINT_new(group), nullptr);
-    CF_CHECK_EQ(EC_POINT_mul(group, pub, prv.GetPtr(), nullptr, nullptr, nullptr), 1);
+    CF_CHECK_NE(pub = std::make_unique<CF_EC_POINT>(ds, group), nullptr);
+    CF_CHECK_EQ(EC_POINT_mul(group->GetPtr(), pub->GetPtr(), prv.GetPtr(), nullptr, nullptr, nullptr), 1);
 
     CF_CHECK_EQ(pub_x.New(), true);
     CF_CHECK_EQ(pub_y.New(), true);
 
 #if !defined(CRYPTOFUZZ_BORINGSSL) && !defined(CRYPTOFUZZ_LIBRESSL) && !defined(CRYPTOFUZZ_OPENSSL_102) && !defined(CRYPTOFUZZ_OPENSSL_110)
-    CF_CHECK_NE(EC_POINT_get_affine_coordinates(group, pub, pub_x.GetPtr(), pub_y.GetPtr(), nullptr), 0);
+    CF_CHECK_NE(EC_POINT_get_affine_coordinates(group->GetPtr(), pub->GetPtr(), pub_x.GetPtr(), pub_y.GetPtr(), nullptr), 0);
 #else
-    CF_CHECK_NE(EC_POINT_get_affine_coordinates_GFp(group, pub, pub_x.GetPtr(), pub_y.GetPtr(), nullptr), 0);
+    CF_CHECK_NE(EC_POINT_get_affine_coordinates_GFp(group->GetPtr(), pub->GetPtr(), pub_x.GetPtr(), pub_y.GetPtr(), nullptr), 0);
 #endif
 
     /* Convert bignum x/y to strings */
@@ -2960,11 +3065,70 @@ std::optional<component::ECC_PublicKey> OpenSSL::OpECC_PrivateToPublic(operation
     ret = { std::string(pub_x_str), std::string(pub_y_str) };
 
 end:
-    EC_POINT_free(pub);
-    EC_GROUP_free(group);
     OPENSSL_free(pub_x_str);
     OPENSSL_free(pub_y_str);
 
+    return ret;
+}
+
+std::optional<component::ECC_KeyPair> OpenSSL::OpECC_GenerateKeyPair(operation::ECC_GenerateKeyPair& op) {
+    std::optional<component::ECC_KeyPair> ret = std::nullopt;
+    Datasource ds(op.modifier.GetPtr(), op.modifier.GetSize());
+
+    EC_KEY* key = nullptr;
+    const BIGNUM* priv = nullptr;
+    char* priv_str = nullptr;
+    std::shared_ptr<CF_EC_GROUP> group = nullptr;
+    std::unique_ptr<CF_EC_POINT> pub = nullptr;
+    BIGNUM* pub_x = nullptr;
+    BIGNUM* pub_y = nullptr;
+    char* pub_x_str = nullptr;
+    char* pub_y_str = nullptr;
+
+    std::optional<int> curveNID;
+    CF_CHECK_NE(curveNID = toCurveNID(op.curveType), std::nullopt);
+    CF_CHECK_NE(key = EC_KEY_new_by_curve_name(*curveNID), nullptr);
+    CF_CHECK_EQ(EC_KEY_generate_key(key), 1);
+
+    /* Private key */
+    {
+        CF_CHECK_NE(priv = EC_KEY_get0_private_key(key), nullptr);
+        CF_CHECK_NE(priv_str = BN_bn2dec(priv), nullptr);
+    }
+
+    /* Public key */
+    {
+        CF_CHECK_NE(pub_x = BN_new(), nullptr);
+        CF_CHECK_NE(pub_y = BN_new(), nullptr);
+        CF_CHECK_NE(group = std::make_shared<CF_EC_GROUP>(ds, *curveNID), nullptr);
+        group->Lock();
+        CF_CHECK_NE(group->GetPtr(), nullptr);
+        CF_CHECK_NE(pub = std::make_unique<CF_EC_POINT>(ds, group), nullptr);
+        CF_CHECK_EQ(EC_POINT_mul(group->GetPtr(), pub->GetPtr(), priv, nullptr, nullptr, nullptr), 1);
+
+#if !defined(CRYPTOFUZZ_BORINGSSL) && !defined(CRYPTOFUZZ_LIBRESSL) && !defined(CRYPTOFUZZ_OPENSSL_102) && !defined(CRYPTOFUZZ_OPENSSL_110)
+        CF_CHECK_NE(EC_POINT_get_affine_coordinates(group->GetPtr(), pub->GetPtr(), pub_x, pub_y, nullptr), 0);
+#else
+        CF_CHECK_NE(EC_POINT_get_affine_coordinates_GFp(group->GetPtr(), pub->GetPtr(), pub_x, pub_y, nullptr), 0);
+#endif
+
+        CF_CHECK_NE(pub_x_str = BN_bn2dec(pub_x), nullptr);
+        CF_CHECK_NE(pub_y_str = BN_bn2dec(pub_y), nullptr);
+    }
+
+    {
+        ret = {
+            std::string(priv_str),
+            { std::string(pub_x_str), std::string(pub_y_str) }
+        };
+    }
+end:
+    EC_KEY_free(key);
+    OPENSSL_free(priv_str);
+    BN_free(pub_x);
+    BN_free(pub_y);
+    OPENSSL_free(pub_x_str);
+    OPENSSL_free(pub_y_str);
     return ret;
 }
 
@@ -2973,25 +3137,27 @@ std::optional<bool> OpenSSL::OpECDSA_Verify(operation::ECDSA_Verify& op) {
     Datasource ds(op.modifier.GetPtr(), op.modifier.GetSize());
 
     CF_EC_KEY key(ds);
-    EC_GROUP* group = nullptr;
+    std::shared_ptr<CF_EC_GROUP> group = nullptr;
 
     ECDSA_SIG* signature = nullptr;
 
-    EC_POINT* pub = nullptr;
-    OpenSSL_detail::Bignum pub_x(ds);
-    OpenSSL_detail::Bignum pub_y(ds);
+    std::unique_ptr<CF_EC_POINT> pub = nullptr;
+    OpenSSL_bignum::Bignum pub_x(ds);
+    OpenSSL_bignum::Bignum pub_y(ds);
 
-    OpenSSL_detail::Bignum sig_s(ds);
-    OpenSSL_detail::Bignum sig_r(ds);
+    OpenSSL_bignum::Bignum sig_s(ds);
+    OpenSSL_bignum::Bignum sig_r(ds);
 
     /* Initialize */
     {
         {
             std::optional<int> curveNID;
             CF_CHECK_NE(curveNID = toCurveNID(op.curveType), std::nullopt);
-            CF_CHECK_NE(group = EC_GROUP_new_by_curve_name(*curveNID), nullptr);
+            CF_CHECK_NE(group = std::make_shared<CF_EC_GROUP>(ds, *curveNID), nullptr);
+            group->Lock();
+            CF_CHECK_NE(group->GetPtr(), nullptr);
         }
-        CF_CHECK_EQ(EC_KEY_set_group(key.GetPtr(), group), 1);
+        CF_CHECK_EQ(EC_KEY_set_group(key.GetPtr(), group->GetPtr()), 1);
 
         /* Construct signature */
         CF_CHECK_EQ(sig_r.Set(op.signature.first.ToString(ds)), true);
@@ -3009,15 +3175,15 @@ std::optional<bool> OpenSSL::OpECDSA_Verify(operation::ECDSA_Verify& op) {
         sig_s.Lock();
 
         /* Construct key */
-        CF_CHECK_NE(pub = EC_POINT_new(group), nullptr);
+        CF_CHECK_NE(pub = std::make_unique<CF_EC_POINT>(ds, group), nullptr);
         CF_CHECK_EQ(pub_x.Set(op.pub.first.ToString(ds)), true);
         CF_CHECK_EQ(pub_y.Set(op.pub.second.ToString(ds)), true);
 #if !defined(CRYPTOFUZZ_BORINGSSL) && !defined(CRYPTOFUZZ_LIBRESSL) && !defined(CRYPTOFUZZ_OPENSSL_102) && !defined(CRYPTOFUZZ_OPENSSL_110)
-        CF_CHECK_NE(EC_POINT_set_affine_coordinates(group, pub, pub_x.GetPtr(), pub_y.GetPtr(), nullptr), 0);
+        CF_CHECK_NE(EC_POINT_set_affine_coordinates(group->GetPtr(), pub->GetPtr(), pub_x.GetPtr(), pub_y.GetPtr(), nullptr), 0);
 #else
-        CF_CHECK_NE(EC_POINT_set_affine_coordinates_GFp(group, pub, pub_x.GetPtr(), pub_y.GetPtr(), nullptr), 0);
+        CF_CHECK_NE(EC_POINT_set_affine_coordinates_GFp(group->GetPtr(), pub->GetPtr(), pub_x.GetPtr(), pub_y.GetPtr(), nullptr), 0);
 #endif
-        CF_CHECK_EQ(EC_KEY_set_public_key(key.GetPtr(), pub), 1);
+        CF_CHECK_EQ(EC_KEY_set_public_key(key.GetPtr(), pub->GetPtr()), 1);
     }
 
     /* Process */
@@ -3035,14 +3201,221 @@ std::optional<bool> OpenSSL::OpECDSA_Verify(operation::ECDSA_Verify& op) {
     }
 
 end:
-    EC_GROUP_free(group);
     if ( signature != nullptr ) {
         ECDSA_SIG_free(signature);
     }
-    EC_POINT_free(pub);
 
     return ret;
 }
+
+std::optional<component::Secret> OpenSSL::OpECDH_Derive(operation::ECDH_Derive& op) {
+    std::optional<component::Secret> ret = std::nullopt;
+    Datasource ds(op.modifier.GetPtr(), op.modifier.GetSize());
+
+    CF_EC_KEY key1(ds);
+    CF_EC_KEY key2(ds);
+    std::unique_ptr<CF_EC_POINT> pub = nullptr;
+    std::shared_ptr<CF_EC_GROUP> group = nullptr;
+
+    /* Initialize */
+    {
+        std::optional<int> curveNID;
+        CF_CHECK_NE(curveNID = toCurveNID(op.curveType), std::nullopt);
+        CF_CHECK_NE(group = std::make_shared<CF_EC_GROUP>(ds, *curveNID), nullptr);
+        group->Lock();
+        CF_CHECK_NE(group->GetPtr(), nullptr);
+        CF_CHECK_EQ(EC_KEY_set_group(key1.GetPtr(), group->GetPtr()), 1);
+        CF_CHECK_EQ(EC_KEY_set_group(key2.GetPtr(), group->GetPtr()), 1);
+    }
+
+    /* Construct public keys */
+    for (size_t i = 0; i < 2; i++) {
+        OpenSSL_bignum::Bignum pub_x(ds);
+        OpenSSL_bignum::Bignum pub_y(ds);
+
+        CF_CHECK_NE(pub = std::make_unique<CF_EC_POINT>(ds, group), nullptr);
+        if ( i == 0 ) {
+            CF_CHECK_EQ(pub_x.Set(op.pub1.first.ToString(ds)), true);
+            CF_CHECK_EQ(pub_y.Set(op.pub1.second.ToString(ds)), true);
+        } else {
+            CF_CHECK_EQ(pub_x.Set(op.pub2.first.ToString(ds)), true);
+            CF_CHECK_EQ(pub_y.Set(op.pub2.second.ToString(ds)), true);
+        }
+#if !defined(CRYPTOFUZZ_BORINGSSL) && !defined(CRYPTOFUZZ_LIBRESSL) && !defined(CRYPTOFUZZ_OPENSSL_102) && !defined(CRYPTOFUZZ_OPENSSL_110)
+        CF_CHECK_NE(EC_POINT_set_affine_coordinates(group->GetPtr(), pub->GetPtr(), pub_x.GetPtr(), pub_y.GetPtr(), nullptr), 0);
+#else
+        CF_CHECK_NE(EC_POINT_set_affine_coordinates_GFp(group->GetPtr(), pub->GetPtr(), pub_x.GetPtr(), pub_y.GetPtr(), nullptr), 0);
+#endif
+        if ( i == 0 ) {
+            CF_CHECK_EQ(EC_KEY_set_public_key(key1.GetPtr(), pub->GetPtr()), 1);
+        } else {
+            CF_CHECK_EQ(EC_KEY_set_public_key(key2.GetPtr(), pub->GetPtr()), 1);
+        }
+    }
+
+    /* Create key */
+    {
+        /* Calculate the size of the buffer for the shared secret */
+        const int fieldSize = EC_GROUP_get_degree(EC_KEY_get0_group(key1.GetPtr()));
+        int outSize = (fieldSize + 7) /8;
+
+        uint8_t* out = util::malloc(outSize);
+
+        /* Derive the shared secret */
+        outSize = ECDH_compute_key(out, outSize, EC_KEY_get0_public_key(key2.GetPtr()), key1.GetPtr(), nullptr);
+
+        if ( outSize == -1 ) {
+            util::free(out);
+        }
+        CF_CHECK_NE(outSize, -1);
+
+        ret = component::Secret(out, outSize);
+        util::free(out);
+    }
+
+end:
+
+    return ret;
+}
+
+std::optional<component::Bignum> OpenSSL::OpBignumCalc(operation::BignumCalc& op) {
+    std::optional<component::Bignum> ret = std::nullopt;
+    Datasource ds(op.modifier.GetPtr(), op.modifier.GetSize());
+
+    OpenSSL_bignum::BN_CTX ctx(ds);
+    std::vector<OpenSSL_bignum::Bignum> bn{
+        OpenSSL_bignum::Bignum(ds),
+        OpenSSL_bignum::Bignum(ds),
+        OpenSSL_bignum::Bignum(ds),
+        OpenSSL_bignum::Bignum(ds) };
+    OpenSSL_bignum::Bignum res(ds);
+    std::unique_ptr<OpenSSL_bignum::Operation> opRunner = nullptr;
+
+    CF_CHECK_EQ(res.New(), true);
+    CF_CHECK_EQ(bn[0].New(), true);
+    CF_CHECK_EQ(bn[1].New(), true);
+    CF_CHECK_EQ(bn[2].New(), true);
+    CF_CHECK_EQ(bn[3].New(), true);
+
+    CF_CHECK_EQ(res.Set("0"), true);
+    CF_CHECK_EQ(bn[0].Set(op.bn0.ToString(ds)), true);
+    CF_CHECK_EQ(bn[1].Set(op.bn1.ToString(ds)), true);
+    CF_CHECK_EQ(bn[2].Set(op.bn2.ToString(ds)), true);
+    CF_CHECK_EQ(bn[3].Set(op.bn3.ToString(ds)), true);
+
+    switch ( op.calcOp.Get() ) {
+        case    CF_CALCOP("Add(A,B)"):
+            opRunner = std::make_unique<OpenSSL_bignum::Add>();
+            break;
+        case    CF_CALCOP("Sub(A,B)"):
+            opRunner = std::make_unique<OpenSSL_bignum::Sub>();
+            break;
+        case    CF_CALCOP("Mul(A,B)"):
+            opRunner = std::make_unique<OpenSSL_bignum::Mul>();
+            break;
+        case    CF_CALCOP("Mod(A,B)"):
+            opRunner = std::make_unique<OpenSSL_bignum::Mod>();
+            break;
+        case    CF_CALCOP("ExpMod(A,B,C)"):
+            opRunner = std::make_unique<OpenSSL_bignum::ExpMod>();
+            break;
+        case    CF_CALCOP("Sqr(A)"):
+            opRunner = std::make_unique<OpenSSL_bignum::Sqr>();
+            break;
+        case    CF_CALCOP("GCD(A,B)"):
+            opRunner = std::make_unique<OpenSSL_bignum::GCD>();
+            break;
+        case    CF_CALCOP("AddMod(A,B,C)"):
+            opRunner = std::make_unique<OpenSSL_bignum::AddMod>();
+            break;
+        case    CF_CALCOP("SubMod(A,B,C)"):
+            opRunner = std::make_unique<OpenSSL_bignum::SubMod>();
+            break;
+        case    CF_CALCOP("MulMod(A,B,C)"):
+            opRunner = std::make_unique<OpenSSL_bignum::MulMod>();
+            break;
+        case    CF_CALCOP("SqrMod(A,B)"):
+            opRunner = std::make_unique<OpenSSL_bignum::SqrMod>();
+            break;
+        case    CF_CALCOP("InvMod(A,B)"):
+            opRunner = std::make_unique<OpenSSL_bignum::InvMod>();
+            break;
+        case    CF_CALCOP("Cmp(A,B)"):
+            opRunner = std::make_unique<OpenSSL_bignum::Cmp>();
+            break;
+        case    CF_CALCOP("Div(A,B)"):
+            opRunner = std::make_unique<OpenSSL_bignum::Div>();
+            break;
+        case    CF_CALCOP("IsPrime(A)"):
+            opRunner = std::make_unique<OpenSSL_bignum::IsPrime>();
+            break;
+        case    CF_CALCOP("Sqrt(A)"):
+            opRunner = std::make_unique<OpenSSL_bignum::Sqrt>();
+            break;
+        case    CF_CALCOP("IsNeg(A)"):
+            opRunner = std::make_unique<OpenSSL_bignum::IsNeg>();
+            break;
+        case    CF_CALCOP("IsEq(A,B)"):
+            opRunner = std::make_unique<OpenSSL_bignum::IsEq>();
+            break;
+        case    CF_CALCOP("IsEven(A)"):
+            opRunner = std::make_unique<OpenSSL_bignum::IsEven>();
+            break;
+        case    CF_CALCOP("IsOdd(A)"):
+            opRunner = std::make_unique<OpenSSL_bignum::IsOdd>();
+            break;
+        case    CF_CALCOP("IsZero(A)"):
+            opRunner = std::make_unique<OpenSSL_bignum::IsZero>();
+            break;
+        case    CF_CALCOP("IsOne(A)"):
+            opRunner = std::make_unique<OpenSSL_bignum::IsOne>();
+            break;
+        case    CF_CALCOP("Jacobi(A,B)"):
+            opRunner = std::make_unique<OpenSSL_bignum::Jacobi>();
+            break;
+#if !defined(CRYPTOFUZZ_BORINGSSL)
+        case    CF_CALCOP("Mod_NIST_192(A)"):
+            opRunner = std::make_unique<OpenSSL_bignum::Mod_NIST_192>();
+            break;
+        case    CF_CALCOP("Mod_NIST_224(A)"):
+            opRunner = std::make_unique<OpenSSL_bignum::Mod_NIST_224>();
+            break;
+        case    CF_CALCOP("Mod_NIST_256(A)"):
+            opRunner = std::make_unique<OpenSSL_bignum::Mod_NIST_256>();
+            break;
+        case    CF_CALCOP("Mod_NIST_384(A)"):
+            opRunner = std::make_unique<OpenSSL_bignum::Mod_NIST_384>();
+            break;
+        case    CF_CALCOP("Mod_NIST_521(A)"):
+            opRunner = std::make_unique<OpenSSL_bignum::Mod_NIST_521>();
+            break;
+#endif
+        case    CF_CALCOP("SqrtMod(A,B)"):
+            opRunner = std::make_unique<OpenSSL_bignum::SqrtMod>();
+            break;
+#if defined(CRYPTOFUZZ_BORINGSSL)
+        case    CF_CALCOP("LCM(A,B)"):
+            opRunner = std::make_unique<OpenSSL_bignum::LCM>();
+            break;
+#endif
+        case    CF_CALCOP("Exp(A,B)"):
+            opRunner = std::make_unique<OpenSSL_bignum::Exp>();
+            break;
+        case    CF_CALCOP("Abs(A)"):
+            opRunner = std::make_unique<OpenSSL_bignum::Abs>();
+            break;
+    }
+
+    CF_CHECK_NE(opRunner, nullptr);
+    CF_CHECK_EQ(opRunner->Run(ds, res, bn, ctx), true);
+
+    ret = res.ToComponentBignum();
+
+end:
+    return ret;
+}
+
+#endif
 
 } /* namespace module */
 } /* namespace cryptofuzz */

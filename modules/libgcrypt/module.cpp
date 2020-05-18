@@ -2,6 +2,7 @@
 #include <cryptofuzz/util.h>
 #include <cryptofuzz/repository.h>
 #include <gcrypt.h>
+#include "bn_ops.h"
 
 namespace cryptofuzz {
 namespace module {
@@ -246,8 +247,6 @@ namespace libgcrypt_detail {
         { CF_CIPHER("RC2_CFB"), {GCRY_CIPHER_RFC2268_128, GCRY_CIPHER_MODE_CFB} },
         { CF_CIPHER("DES_EDE3_CFB"), {GCRY_CIPHER_3DES, GCRY_CIPHER_MODE_CFB} },
 
-        /* Wrong results */
-#if 0
         { CF_CIPHER("AES_128_CTR"), {GCRY_CIPHER_AES128, GCRY_CIPHER_MODE_CTR} },
         { CF_CIPHER("AES_192_CTR"), {GCRY_CIPHER_AES192, GCRY_CIPHER_MODE_CTR} },
         { CF_CIPHER("AES_256_CTR"), {GCRY_CIPHER_AES256, GCRY_CIPHER_MODE_CTR} },
@@ -255,7 +254,6 @@ namespace libgcrypt_detail {
         { CF_CIPHER("CAMELLIA_128_CTR"), {GCRY_CIPHER_CAMELLIA128, GCRY_CIPHER_MODE_CTR} },
         { CF_CIPHER("CAMELLIA_192_CTR"), {GCRY_CIPHER_CAMELLIA192, GCRY_CIPHER_MODE_CTR} },
         { CF_CIPHER("CAMELLIA_256_CTR"), {GCRY_CIPHER_CAMELLIA256, GCRY_CIPHER_MODE_CTR} },
-#endif
 
         { CF_CIPHER("AES_128_GCM"), {GCRY_CIPHER_AES128, GCRY_CIPHER_MODE_GCM} },
         { CF_CIPHER("AES_192_GCM"), {GCRY_CIPHER_AES192, GCRY_CIPHER_MODE_GCM} },
@@ -300,9 +298,6 @@ namespace libgcrypt_detail {
                 CF_CHECK_NE(outputBufferSize, 0);
                 CF_CHECK_NE(SymmetricCipherLUT.find(cipher.cipherType.Get()), SymmetricCipherLUT.end());
 
-                /* CTR is broken */
-                //CF_CHECK_EQ(repository::IsCTR(cipher.cipherType.Get()), false);
-
                 /* CFB is broken */
                 //CF_CHECK_EQ(repository::IsCFB(cipher.cipherType.Get()), false);
 
@@ -310,7 +305,7 @@ namespace libgcrypt_detail {
 
                 CF_CHECK_EQ(gcry_cipher_get_algo_keylen(cipherModePair.first), cipher.key.GetSize());
                 if ( cipher.cipherType.Get() == CF_CIPHER("CHACHA20") ) {
-                    CF_CHECK_EQ(16, cipher.iv.GetSize());
+                    CF_CHECK_EQ(12, cipher.iv.GetSize());
                 } else {
                     CF_CHECK_EQ(gcry_cipher_get_algo_blklen(cipherModePair.first), cipher.iv.GetSize());
                 }
@@ -324,7 +319,13 @@ namespace libgcrypt_detail {
                 hOpen = true;
 
                 CF_CHECK_EQ(gcry_cipher_setkey(h, cipher.key.GetPtr(), cipher.key.GetSize()), GPG_ERR_NO_ERROR);
-                CF_CHECK_EQ(gcry_cipher_setiv(h, cipher.iv.GetPtr(), cipher.iv.GetSize()), GPG_ERR_NO_ERROR);
+                if ( cipher.cipherType.Get() == CF_CIPHER("CHACHA20") ) {
+                    CF_CHECK_EQ(gcry_cipher_setiv(h, cipher.iv.GetPtr(), cipher.iv.GetSize()), GPG_ERR_NO_ERROR);
+                } else if ( repository::IsCTR(cipher.cipherType.Get()) ) {
+                    CF_CHECK_EQ(gcry_cipher_setctr(h, cipher.iv.GetPtr(), cipher.iv.GetSize()), GPG_ERR_NO_ERROR);
+                } else {
+                    CF_CHECK_EQ(gcry_cipher_setiv(h, cipher.iv.GetPtr(), cipher.iv.GetSize()), GPG_ERR_NO_ERROR);
+                }
 
                 switch ( cipherModePair.second ) {
                     case GCRY_CIPHER_MODE_STREAM:
@@ -441,7 +442,6 @@ namespace libgcrypt_detail {
 } /* namespace libgcrypt_detail */
 
 std::optional<component::Ciphertext> libgcrypt::OpSymmetricEncrypt(operation::SymmetricEncrypt& op) {
-    if ( op.cipher.key.GetSize() != 32 ) return std::nullopt;
     libgcrypt_detail::Crypt crypt(op);
     return crypt.Encrypt(op);
 }
@@ -503,6 +503,192 @@ std::optional<component::Key> libgcrypt::OpKDF_PBKDF2(operation::KDF_PBKDF2& op)
 end:
     util::free(out);
 
+    return ret;
+}
+
+namespace libgcrypt_detail {
+    std::optional<std::string> toCurveString(const component::CurveType& curveType) {
+        static const std::map<uint64_t, std::string> LUT = {
+#if 0
+            { CF_ECC_CURVE(""), "Curve25519" },
+            { CF_ECC_CURVE(""), "Ed25519" },
+            { CF_ECC_CURVE(""), "GOST2001-CryptoPro-A" },
+            { CF_ECC_CURVE(""), "GOST2001-CryptoPro-B" },
+            { CF_ECC_CURVE(""), "GOST2001-CryptoPro-C" },
+            { CF_ECC_CURVE(""), "GOST2001-test" },
+            { CF_ECC_CURVE(""), "NIST P-192" },
+            { CF_ECC_CURVE(""), "NIST P-224" },
+            { CF_ECC_CURVE(""), "NIST P-256" },
+            { CF_ECC_CURVE(""), "NIST P-384" },
+            { CF_ECC_CURVE(""), "NIST P-521" },
+            { CF_ECC_CURVE(""), "X448" },
+#endif
+            { CF_ECC_CURVE("gost_256A"), "GOST2012-256-tc26-A" },
+            { CF_ECC_CURVE("gost_512A"), "GOST2012-512-tc26-A" },
+            { CF_ECC_CURVE("brainpool160r1"), "brainpoolP160r1" },
+            { CF_ECC_CURVE("brainpool192r1"), "brainpoolP192r1" },
+            { CF_ECC_CURVE("brainpool224r1"), "brainpoolP224r1" },
+            { CF_ECC_CURVE("brainpool256r1"), "brainpoolP256r1" },
+            { CF_ECC_CURVE("brainpool320r1"), "brainpoolP320r1" },
+            { CF_ECC_CURVE("brainpool384r1"), "brainpoolP384r1" },
+            { CF_ECC_CURVE("brainpool512r1"), "brainpoolP512r1" },
+            { CF_ECC_CURVE("secp256k1"), "secp256k1" },
+            { CF_ECC_CURVE("sm2p256v1"), "sm2p256v1" },
+        };
+
+        if ( LUT.find(curveType.Get()) == LUT.end() ) {
+            return std::nullopt;;
+        }
+
+        return LUT.at(curveType.Get());
+    }
+} /* namespace libgcrypt_detail */
+
+std::optional<component::ECC_PublicKey> libgcrypt::OpECC_PrivateToPublic(operation::ECC_PrivateToPublic& op) {
+    std::optional<component::ECC_PublicKey> ret = std::nullopt;
+    Datasource ds(op.modifier.GetPtr(), op.modifier.GetSize());
+
+    std::optional<std::string> curveStr = std::nullopt;
+
+    gcry_ctx_t ctx = nullptr;
+    gcry_mpi_point_t Q = nullptr;
+    gcry_mpi_point_t G = nullptr;
+
+    libgcrypt_bignum::Bignum priv;
+    libgcrypt_bignum::Bignum x;
+    libgcrypt_bignum::Bignum y;
+    CF_CHECK_EQ(priv.Set(op.priv.ToString(ds)), true);
+    CF_CHECK_EQ(x.Set("0"), true);
+    CF_CHECK_EQ(y.Set("0"), true);
+
+    /* Initialize */
+    {
+        CF_CHECK_NE(curveStr = libgcrypt_detail::toCurveString(op.curveType), std::nullopt);
+        CF_CHECK_EQ(gcry_mpi_ec_new(&ctx, nullptr, curveStr->c_str()), 0);
+    }
+
+    /* Process */
+    {
+        CF_CHECK_NE(G = gcry_mpi_ec_get_point("g", ctx, 1), nullptr);
+        CF_CHECK_NE(Q = gcry_mpi_point_new(0), nullptr);
+        /* noret */ gcry_mpi_ec_mul(Q, priv.GetPtr(), G, ctx);
+    }
+
+    /* Finalize */
+    {
+        CF_CHECK_EQ(gcry_mpi_ec_get_affine(x.GetPtr(), y.GetPtr(), Q, ctx), 0);
+
+        std::optional<std::string> x_str;
+        std::optional<std::string> y_str;
+
+        CF_CHECK_NE(x_str = x.ToString(), std::nullopt);
+        CF_CHECK_NE(y_str = y.ToString(), std::nullopt);
+
+        ret = { *x_str, *y_str };
+    }
+
+end:
+    gcry_ctx_release(ctx);
+    gcry_mpi_point_release(Q);
+    gcry_mpi_point_release(G);
+
+    return ret;
+}
+
+std::optional<component::Bignum> libgcrypt::OpBignumCalc(operation::BignumCalc& op) {
+    std::optional<component::Bignum> ret = std::nullopt;
+    Datasource ds(op.modifier.GetPtr(), op.modifier.GetSize());
+    std::unique_ptr<libgcrypt_bignum::Operation> opRunner = nullptr;
+
+    std::vector<libgcrypt_bignum::Bignum> bn{
+        libgcrypt_bignum::Bignum(),
+        libgcrypt_bignum::Bignum(),
+        libgcrypt_bignum::Bignum(),
+        libgcrypt_bignum::Bignum(),
+    };
+    libgcrypt_bignum::Bignum res;
+
+    CF_CHECK_EQ(res.Set("0"), true);
+    CF_CHECK_EQ(bn[0].Set(op.bn0.ToString(ds)), true);
+    CF_CHECK_EQ(bn[1].Set(op.bn1.ToString(ds)), true);
+    CF_CHECK_EQ(bn[2].Set(op.bn2.ToString(ds)), true);
+    CF_CHECK_EQ(bn[3].Set(op.bn3.ToString(ds)), true);
+
+    switch ( op.calcOp.Get() ) {
+        case    CF_CALCOP("Add(A,B)"):
+            opRunner = std::make_unique<libgcrypt_bignum::Add>();
+            break;
+        case    CF_CALCOP("Sub(A,B)"):
+            opRunner = std::make_unique<libgcrypt_bignum::Sub>();
+            break;
+        case    CF_CALCOP("Mul(A,B)"):
+            opRunner = std::make_unique<libgcrypt_bignum::Mul>();
+            break;
+        case    CF_CALCOP("Div(A,B)"):
+            opRunner = std::make_unique<libgcrypt_bignum::Div>();
+            break;
+        case    CF_CALCOP("ExpMod(A,B,C)"):
+            opRunner = std::make_unique<libgcrypt_bignum::ExpMod>();
+            break;
+        case    CF_CALCOP("GCD(A,B)"):
+            opRunner = std::make_unique<libgcrypt_bignum::GCD>();
+            break;
+        case    CF_CALCOP("InvMod(A,B)"):
+            opRunner = std::make_unique<libgcrypt_bignum::InvMod>();
+            break;
+        case    CF_CALCOP("Cmp(A,B)"):
+            opRunner = std::make_unique<libgcrypt_bignum::Cmp>();
+            break;
+        case    CF_CALCOP("Abs(A)"):
+            opRunner = std::make_unique<libgcrypt_bignum::Abs>();
+            break;
+        case    CF_CALCOP("Neg(A)"):
+            opRunner = std::make_unique<libgcrypt_bignum::Neg>();
+            break;
+        case    CF_CALCOP("RShift(A,B)"):
+            opRunner = std::make_unique<libgcrypt_bignum::RShift>();
+            break;
+        case    CF_CALCOP("LShift1(A)"):
+            opRunner = std::make_unique<libgcrypt_bignum::LShift1>();
+            break;
+        case    CF_CALCOP("IsNeg(A)"):
+            opRunner = std::make_unique<libgcrypt_bignum::IsNeg>();
+            break;
+        case    CF_CALCOP("IsEq(A,B)"):
+            opRunner = std::make_unique<libgcrypt_bignum::IsEq>();
+            break;
+        case    CF_CALCOP("IsZero(A)"):
+            opRunner = std::make_unique<libgcrypt_bignum::IsZero>();
+            break;
+        case    CF_CALCOP("IsOne(A)"):
+            opRunner = std::make_unique<libgcrypt_bignum::IsOne>();
+            break;
+        case    CF_CALCOP("MulMod(A,B,C)"):
+            opRunner = std::make_unique<libgcrypt_bignum::MulMod>();
+            break;
+        case    CF_CALCOP("AddMod(A,B,C)"):
+            opRunner = std::make_unique<libgcrypt_bignum::AddMod>();
+            break;
+        case    CF_CALCOP("SubMod(A,B,C)"):
+            opRunner = std::make_unique<libgcrypt_bignum::SubMod>();
+            break;
+        case    CF_CALCOP("Bit(A,B)"):
+            opRunner = std::make_unique<libgcrypt_bignum::Bit>();
+            break;
+        case    CF_CALCOP("SetBit(A,B)"):
+            opRunner = std::make_unique<libgcrypt_bignum::SetBit>();
+            break;
+        case    CF_CALCOP("ClearBit(A,B)"):
+            opRunner = std::make_unique<libgcrypt_bignum::ClearBit>();
+            break;
+    }
+
+    CF_CHECK_NE(opRunner, nullptr);
+    CF_CHECK_EQ(opRunner->Run(ds, res, bn), true);
+
+    ret = res.ToComponentBignum();
+
+end:
     return ret;
 }
 } /* namespace module */
