@@ -1,6 +1,7 @@
 #pragma once
 
 #include <fuzzing/datasource/id.hpp>
+#include <string>
 
 namespace cryptofuzz {
 namespace repository {
